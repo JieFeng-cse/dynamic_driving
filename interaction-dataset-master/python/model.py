@@ -134,6 +134,8 @@ class Model(nn.Module):
         self.node_dim = node_dim
         self.device = device
         self.fusion = args.fusion
+        self.gcn_type = args.gcn_type
+        print(self.gcn_type)
         if args.normalization:
             self.layer_norm = nn.ModuleList([ nn.LayerNorm([self.num_nodes, 8]) for i in range(self.frame_n - 1) ])
         if self.fusion:
@@ -143,9 +145,20 @@ class Model(nn.Module):
             elif graph_con == 'icra':
                 self.gc1 = similarity_graph_constructor(self.num_nodes,8,10,self.device)
                 self.gc2 = similarity_graph_constructor(self.num_nodes,8,10,self.device)
-            self.gcn1 = DenseGCNConv(10,32)
-            self.gcn2 = DenseGCNConv(32,16)
-            self.gcn3 = DenseGCNConv(16,8)
+            if args.gcn_type == 'gcn':
+                self.gcn1 = DenseGCNConv(10,32)
+                self.gcn2 = DenseGCNConv(32,16)
+                self.gcn3 = DenseGCNConv(16,8)
+            elif args.gcn_type == 'gin':
+                ginnn = nn.Sequential(
+                    nn.Linear(10,16),
+                    # nn.ReLU(True),
+                    # nn.Linear(args.hid1, args.hid2),
+                    nn.ReLU(True),
+                    nn.Linear(16,8),
+                    nn.ReLU(True)
+                )
+                self.gin = DeGINConv(ginnn)
             self.lin1 = nn.Linear(16,8)
             self.lin2 = nn.Linear(8,2)
         else:
@@ -166,19 +179,33 @@ class Model(nn.Module):
             x_graph_2 = torch.squeeze(x_graph_2)
             x_graph_1 = torch.tensor(x_graph_1, dtype=torch.float32).to(self.device)
             x_graph_2 = torch.tensor(x_graph_2, dtype=torch.float32).to(self.device)
-            adp1 = self.gc1(x_graph_1)
-            adp2 = self.gc2(x_graph_2)
+            adp1 = F.relu(self.gc1(x_graph_1))
+            adp2 = F.relu(self.gc2(x_graph_2))
+            if self.gcn_type == 'gcn':
+                x11 = self.gcn1(x_graph_1, adp1)
+                # x11 = self.layer_norm[0](x11)
+                x11 = F.relu(x11)
+                x12 = self.gcn2(x11, adp1)
+                # x12 = self.layer_norm[0](x12)
+                x12 = F.relu(x12)
+                x13 = self.gcn3(x12, adp1)
+                x13 = self.layer_norm[0](x13)
+                x13 = F.relu(x13)
 
-            x11 = self.gcn1(x_graph_1, adp1)
-            x12 = self.gcn2(x11, adp1)
-            x13 = self.gcn3(x12, adp1)
-            x13 = self.layer_norm[0](x13)
-
-            x21 = self.gcn1(x_graph_2, adp2)
-            x22 = self.gcn2(x21, adp2)
-            x23 = self.gcn3(x22, adp2)
-            x23 = self.layer_norm[0](x23)
-
+                x21 = self.gcn1(x_graph_2, adp2)
+                # x21 = self.layer_norm[1](x21)
+                x21 = F.relu(x21)
+                x22 = self.gcn2(x21, adp2)
+                # x21 = self.layer_norm[1](x22)
+                x21 = F.relu(x22)
+                x23 = self.gcn3(x22, adp2)
+                x23 = self.layer_norm[1](x23)
+                x23 = F.relu(x23)
+            elif self.gcn_type == 'gin':
+                x13 = F.relu(self.gin(x_graph_1, adp1))
+                x13 = self.layer_norm[0](x13)
+                x23 = F.relu(self.gin(x_graph_2, adp2))
+                x23 = self.layer_norm[0](x23)
             # x_final = torch.cat((x23,x13),2) #B*node_num*2feature_dim
             # x_final = x_final.reshape(x_final.shape[0],x_final.shape[1]*x_final.shape[2])
             x_agent_feature = torch.cat((x13[:,0,:],x23[:,0,:]),1)

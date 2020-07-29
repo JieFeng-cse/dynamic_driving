@@ -22,8 +22,8 @@ def evaluate(validation_loader,model,criterion,batch_size):
         for Xs,Lables in validation_loader:
             output = (model(Xs)).type(torch.double)
             Lables = (Lables).type(torch.double)
-            if i%200 == 0:
-                print('prediction: ' + str(output[0].item()) + ' label: ' + str(Lables[0].item()))
+            # if i%200 == 0:
+            #     print('prediction: ' + str(output[0]) + ' label: ' + str(Lables[0]))
             val_loss = criterion(output, Lables)
             val_loss.type(torch.double)
 
@@ -53,8 +53,8 @@ def train(dataset_loader,model,criterion,optim, batch_size):
     return total_loss / n_smaples
 
 parser = argparse.ArgumentParser(description='PyTorch traj forecasting')
-parser.add_argument('--epochs', type=int, default=300,help='upper epoch limit')
-parser.add_argument('--batch_size', type=int, default=8, metavar='N',help='batch size')
+parser.add_argument('--epochs', type=int, default=3000,help='upper epoch limit')
+parser.add_argument('--batch_size', type=int, default=128, metavar='N',help='batch size')
 parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--mode', type=str, default='train',help='train or test')
 parser.add_argument('--log_interval', type=int, default=2000, metavar='N',help='report interval')
@@ -62,7 +62,8 @@ parser.add_argument('--log_interval', type=int, default=2000, metavar='N',help='
 parser.add_argument('--save', type=str,  default='/home/jonathon/Documents/new_project/interaction-dataset-master/model_logs/',help='path to save the final model')
 parser.add_argument('--cuda', type=str, default=True) 
 parser.add_argument('--optim', type=str, default='adam')
-parser.add_argument('--gc', type=str, default='DynamicMts',help='type of graph constructor') #'DynamicMts'
+parser.add_argument('--gc', type=str, default='icra',help='type of graph constructor') #'DynamicMts'
+parser.add_argument('--gcn_type', type=str, default='gcn',help='type of graph convolution')
 parser.add_argument('--fusion', type=bool, default=True,help='fuse information from different frames before or after gc')
 parser.add_argument('--lr', type=float, default=0.001)
 parser.add_argument('--clip',type=int,default=5,help='clip')

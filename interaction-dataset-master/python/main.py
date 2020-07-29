@@ -82,6 +82,8 @@ args = parser.parse_args()
 args.cuda = args.gpu is not None
 if args.cuda:
     torch.cuda.set_device(args.gpu)
+else:
+
 
 # Set the random seed manually for reproducibility.
 torch.manual_seed(args.seed)
@@ -96,7 +98,12 @@ val_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data
 
 feature_map = TemData(npy_path,args.frame_n,args.device)
 val_map = TemData(val_path,args.frame_n,args.device)
-device = torch.device(args.device)
+if args.gpu != None:
+    device = torch.device(args.device)
+else:
+    device = torch.device('cpu')
+
+
 
 model = Model(args,device,graph_con=args.gc)
 if args.cuda:

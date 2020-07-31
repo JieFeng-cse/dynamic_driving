@@ -18,8 +18,8 @@ class similarity_graph_constructor(nn.Module):
         self.feature_dim = feature_dim
         self.device = device
         self.NG = 2
-        self.fc_theta = nn.Linear(self.feature_dim, 5) 
-        self.fc_phi = nn.Linear(self.feature_dim, 5)
+        self.fc_theta = nn.Linear(self.feature_dim, 16) 
+        self.fc_phi = nn.Linear(self.feature_dim, 16)
         self.only_dis = False
     def cal_dis_metrix(self,X):
         dis_metrix = np.zeros((X.shape[0], self.nnodes, self.nnodes))
@@ -136,7 +136,7 @@ class Model(nn.Module):
         self.fusion = args.fusion
         self.gcn_type = args.gcn_type
         self.num_graph = args.num_graph
-        self.max_or_fixed = 'fixed'
+        self.max_or_fixed = 'max'
         self.multigraph = args.multigraph
         if args.normalization:
             if not self.multigraph:
@@ -162,11 +162,11 @@ class Model(nn.Module):
                     self.gcn2 = DenseGCNConv(32,16)
                     self.gcn3 = DenseGCNConv(16,8)
                 else:
-                    self.gcn11_list = torch.nn.ModuleList([DenseGCNConv(10,16) for i in range(self.num_graph)])
-                    self.gcn12_list = torch.nn.ModuleList([DenseGCNConv(16,8) for i in range(self.num_graph)])
+                    self.gcn1_list = torch.nn.ModuleList([DenseGCNConv(10,16) for i in range(self.num_graph)])
+                    self.gcn2_list = torch.nn.ModuleList([DenseGCNConv(16,8) for i in range(self.num_graph)])
 
-                    self.gcn21_list = torch.nn.ModuleList([DenseGCNConv(10,16) for i in range(self.num_graph)])
-                    self.gcn22_list = torch.nn.ModuleList([DenseGCNConv(16,8) for i in range(self.num_graph)])
+                    # self.gcn21_list = torch.nn.ModuleList([DenseGCNConv(10,16) for i in range(self.num_graph)])
+                    # self.gcn22_list = torch.nn.ModuleList([DenseGCNConv(16,8) for i in range(self.num_graph)])
 
             elif args.gcn_type == 'gin':
                 ginnn = nn.Sequential(
@@ -240,8 +240,8 @@ class Model(nn.Module):
                 graph1_feature_list = []
                 for i in range(self.num_graph):
                     A1 = self.gc1_list[i](x_graph_1)
-                    x11 = F.relu(self.gcn11_list[i](x_graph_1, A1))
-                    x12 = self.gcn12_list[i](x11, A1)
+                    x11 = F.relu(self.gcn1_list[i](x_graph_1, A1))
+                    x12 = self.gcn2_list[i](x11, A1)
                     x12 = self.gcn_layer_norm_list1[i](x12)
                     x12 = F.relu(x12)
                     graph1_feature_list.append(x12)
@@ -249,8 +249,8 @@ class Model(nn.Module):
                 graph2_feature_list = []
                 for i in range(self.num_graph):
                     A2 = self.gc2_list[i](x_graph_2)
-                    x21 = F.relu(self.gcn21_list[i](x_graph_2, A2))
-                    x22 = self.gcn22_list[i](x21, A2)
+                    x21 = F.relu(self.gcn1_list[i](x_graph_2, A2))
+                    x22 = self.gcn2_list[i](x21, A2)
                     x22 = self.gcn_layer_norm_list2[i](x22)
                     x22 = F.relu(x22)
                     graph2_feature_list.append(x22)
@@ -265,10 +265,10 @@ class Model(nn.Module):
 
         else: #the same as cvpr paper, group activity recognition
             batch_size = x.shape[0]
-            x_graph = x.reshape([batch_size, -1, self.node_dim])# to [B, num_car*frame-1, features]
+            x_graph = x.reshape([batch_size, -1, self.node_dim]).float()# to [B, num_car*frame-1, features]
             # x_graph = torch.sum(x, dim = 1) # lost one dimension, to [B, num_car, features]
             #print(x_graph.shape)
-            x_graph = torch.tensor(x_graph, dtype=torch.float32).to(self.device)
+            # x_graph = torch.tensor(x_graph, dtype=torch.float32).to(self.device)
             graph_feature_list = []
             for i in range(self.num_graph):
                 A = self.gc_list[i](x_graph)

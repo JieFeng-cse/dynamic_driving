@@ -18,8 +18,8 @@ class similarity_graph_constructor(nn.Module):
         self.feature_dim = feature_dim
         self.device = device
         self.NG = 2
-        self.fc_theta = nn.Linear(self.feature_dim, 16) 
-        self.fc_phi = nn.Linear(self.feature_dim, 16)
+        self.fc_theta = nn.Linear(self.feature_dim, 5) 
+        self.fc_phi = nn.Linear(self.feature_dim, 5)
         self.only_dis = False
     def cal_dis_metrix(self,X):
         dis_metrix = np.zeros((X.shape[0], self.nnodes, self.nnodes))
@@ -59,9 +59,9 @@ class similarity_graph_constructor(nn.Module):
             relation_graph[dis_mask] = -float('inf')
             relation_graph = (30 / (relation_graph + 0.000001))
             relation_graph = torch.softmax(relation_graph,dim=2)
-        assert relation_graph.shape[0] == X.shape[0], "batch size is wrong"
-        assert relation_graph.shape[1] == self.nnodes, "node number is wrong"
-        assert relation_graph.shape[2] == self.nnodes, "not an adjacency matrix"
+        # assert relation_graph.shape[0] == X.shape[0], "batch size is wrong"
+        # assert relation_graph.shape[1] == self.nnodes, "node number is wrong"
+        # assert relation_graph.shape[2] == self.nnodes, "not an adjacency matrix"
         return relation_graph       
 
 
@@ -135,20 +135,39 @@ class Model(nn.Module):
         self.device = device
         self.fusion = args.fusion
         self.gcn_type = args.gcn_type
-        print(self.gcn_type)
+        self.num_graph = args.num_graph
+        self.max_or_fixed = 'fixed'
+        self.multigraph = args.multigraph
         if args.normalization:
-            self.layer_norm = nn.ModuleList([ nn.LayerNorm([self.num_nodes, 8]) for i in range(self.frame_n - 1) ])
+            if not self.multigraph:
+                self.layer_norm = nn.ModuleList([ nn.LayerNorm([self.num_nodes, 8]) for i in range(self.frame_n - 1) ])
+            else:
+                self.gcn_layer_norm_list1 = torch.nn.ModuleList([nn.LayerNorm([self.num_nodes,8]) for i in range(self.num_graph)])
+                self.gcn_layer_norm_list2 = torch.nn.ModuleList([nn.LayerNorm([self.num_nodes,8]) for i in range(self.num_graph)])
         if self.fusion:
             if graph_con == 'DynamicMts': 
                 self.gc1 = graph_constructor(self.num_nodes,8,10,self.device)
                 self.gc2 = graph_constructor(self.num_nodes,8,10,self.device)
             elif graph_con == 'icra':
-                self.gc1 = similarity_graph_constructor(self.num_nodes,8,10,self.device)
-                self.gc2 = similarity_graph_constructor(self.num_nodes,8,10,self.device)
+                if not self.multigraph: 
+                    self.gc1 = similarity_graph_constructor(self.num_nodes,8,10,self.device)
+                    self.gc2 = similarity_graph_constructor(self.num_nodes,8,10,self.device)
+                else:
+                    self.gc1_list = torch.nn.ModuleList([similarity_graph_constructor(self.num_nodes,8,10,self.device) for i in range(self.num_graph)])
+                    self.gc2_list = torch.nn.ModuleList([similarity_graph_constructor(self.num_nodes,8,10,self.device) for i in range(self.num_graph)])
+
             if args.gcn_type == 'gcn':
-                self.gcn1 = DenseGCNConv(10,32)
-                self.gcn2 = DenseGCNConv(32,16)
-                self.gcn3 = DenseGCNConv(16,8)
+                if not self.multigraph:
+                    self.gcn1 = DenseGCNConv(10,32)
+                    self.gcn2 = DenseGCNConv(32,16)
+                    self.gcn3 = DenseGCNConv(16,8)
+                else:
+                    self.gcn11_list = torch.nn.ModuleList([DenseGCNConv(10,16) for i in range(self.num_graph)])
+                    self.gcn12_list = torch.nn.ModuleList([DenseGCNConv(16,8) for i in range(self.num_graph)])
+
+                    self.gcn21_list = torch.nn.ModuleList([DenseGCNConv(10,16) for i in range(self.num_graph)])
+                    self.gcn22_list = torch.nn.ModuleList([DenseGCNConv(16,8) for i in range(self.num_graph)])
+
             elif args.gcn_type == 'gin':
                 ginnn = nn.Sequential(
                     nn.Linear(10,16),
@@ -165,10 +184,10 @@ class Model(nn.Module):
             if graph_con == 'DynamicMts':
                 self.gc = graph_constructor(self.num_nodes,8,10,self.device)
             elif graph_con == 'icra':
-                self.gc = similarity_graph_constructor(self.num_nodes,8,10,self.device)
-            self.gcn1 = DenseGCNConv(10,8)
-            self.lin1 = nn.Linear(8,4)
-            self.lin2 = nn.Linear(4,2)
+                self.gc_list = torch.nn.ModuleList([similarity_graph_constructor(self.num_nodes,8,10,self.device) for i in range(self.num_graph)]) 
+            self.gcn_list = torch.nn.ModuleList([DenseGCNConv(10,10) for i in range(self.num_graph)])
+            self.gcn_layer_norm_list = torch.nn.ModuleList([nn.LayerNorm([self.num_nodes*(self.frame_n-1),self.node_dim]) for i in range(self.num_graph)])
+            self.lin1 = nn.Linear(10,2)
 
         # self.criterion = nn.MSELoss(size_average = False).cuda()
     def forward(self,x):
@@ -179,53 +198,97 @@ class Model(nn.Module):
             x_graph_2 = torch.squeeze(x_graph_2)
             x_graph_1 = torch.tensor(x_graph_1, dtype=torch.float32).to(self.device)
             x_graph_2 = torch.tensor(x_graph_2, dtype=torch.float32).to(self.device)
-            adp1 = F.relu(self.gc1(x_graph_1))
-            adp2 = F.relu(self.gc2(x_graph_2))
-            if self.gcn_type == 'gcn':
-                x11 = self.gcn1(x_graph_1, adp1)
-                # x11 = self.layer_norm[0](x11)
-                x11 = F.relu(x11)
-                x12 = self.gcn2(x11, adp1)
-                # x12 = self.layer_norm[0](x12)
-                x12 = F.relu(x12)
-                x13 = self.gcn3(x12, adp1)
-                x13 = self.layer_norm[0](x13)
-                x13 = F.relu(x13)
+            if not self.multigraph:
+                adp1 = F.relu(self.gc1(x_graph_1))
+                adp2 = F.relu(self.gc2(x_graph_2))
+                if self.gcn_type == 'gcn':
+                    x11 = self.gcn1(x_graph_1, adp1)
+                    # x11 = self.layer_norm[0](x11)
+                    x11 = F.relu(x11)
+                    x12 = self.gcn2(x11, adp1)
+                    # x12 = self.layer_norm[0](x12)
+                    x12 = F.relu(x12)
+                    x13 = self.gcn3(x12, adp1)
+                    x13 = self.layer_norm[0](x13)
+                    x13 = F.relu(x13)
 
-                x21 = self.gcn1(x_graph_2, adp2)
-                # x21 = self.layer_norm[1](x21)
-                x21 = F.relu(x21)
-                x22 = self.gcn2(x21, adp2)
-                # x21 = self.layer_norm[1](x22)
-                x21 = F.relu(x22)
-                x23 = self.gcn3(x22, adp2)
-                x23 = self.layer_norm[1](x23)
-                x23 = F.relu(x23)
-            elif self.gcn_type == 'gin':
-                x13 = F.relu(self.gin(x_graph_1, adp1))
-                x13 = self.layer_norm[0](x13)
-                x23 = F.relu(self.gin(x_graph_2, adp2))
-                x23 = self.layer_norm[0](x23)
-            # x_final = torch.cat((x23,x13),2) #B*node_num*2feature_dim
-            # x_final = x_final.reshape(x_final.shape[0],x_final.shape[1]*x_final.shape[2])
-            x_agent_feature = torch.cat((x13[:,0,:],x23[:,0,:]),1)
-            assert x_agent_feature.shape[0] == x23.shape[0], "batch size error"
-            assert x_agent_feature.shape[1] == 16, "input channel error"
+                    x21 = self.gcn1(x_graph_2, adp2)
+                    # x21 = self.layer_norm[1](x21)
+                    x21 = F.relu(x21)
+                    x22 = self.gcn2(x21, adp2)
+                    # x21 = self.layer_norm[1](x22)
+                    x21 = F.relu(x22)
+                    x23 = self.gcn3(x22, adp2)
+                    x23 = self.layer_norm[1](x23)
+                    x23 = F.relu(x23)
+            
+                elif self.gcn_type == 'gin':
+                    x13 = F.relu(self.gin(x_graph_1, adp1))
+                    x13 = self.layer_norm[0](x13)
+                    x23 = F.relu(self.gin(x_graph_2, adp2))
+                    x23 = self.layer_norm[0](x23)
+                # x_final = torch.cat((x23,x13),2) #B*node_num*2feature_dim
+                # x_final = x_final.reshape(x_final.shape[0],x_final.shape[1]*x_final.shape[2])
+                x_agent_feature = torch.cat((x13[:,0,:],x23[:,0,:]),1)
+                assert x_agent_feature.shape[0] == x23.shape[0], "batch size error"
+                assert x_agent_feature.shape[1] == 16, "input channel error"
 
-            h1 = self.lin1(x_agent_feature)
-            h2 = self.lin2(h1)
-            return h2
-        else:
-            x_graph = torch.sum(x, dim = 1)
+                h1 = self.lin1(x_agent_feature)
+                h2 = self.lin2(h1)
+                return h2
+            else:
+                graph1_feature_list = []
+                for i in range(self.num_graph):
+                    A1 = self.gc1_list[i](x_graph_1)
+                    x11 = F.relu(self.gcn11_list[i](x_graph_1, A1))
+                    x12 = self.gcn12_list[i](x11, A1)
+                    x12 = self.gcn_layer_norm_list1[i](x12)
+                    x12 = F.relu(x12)
+                    graph1_feature_list.append(x12)
+                graph_feature1 = torch.sum(torch.stack(graph1_feature_list),dim=0)
+                graph2_feature_list = []
+                for i in range(self.num_graph):
+                    A2 = self.gc2_list[i](x_graph_2)
+                    x21 = F.relu(self.gcn21_list[i](x_graph_2, A2))
+                    x22 = self.gcn22_list[i](x21, A2)
+                    x22 = self.gcn_layer_norm_list2[i](x22)
+                    x22 = F.relu(x22)
+                    graph2_feature_list.append(x22)
+                graph_feature2 = torch.sum(torch.stack(graph2_feature_list),dim=0)
+                x_agent_feature = torch.cat((graph_feature1[:,0,:],graph_feature2[:,0,:]),1)
+                assert x_agent_feature.shape[0] == x_graph_1.shape[0], "batch size error"
+                assert x_agent_feature.shape[1] == 16, "input channel error"
+
+                h1 = self.lin1(x_agent_feature)
+                h2 = self.lin2(h1)
+                return h2
+
+        else: #the same as cvpr paper, group activity recognition
+            batch_size = x.shape[0]
+            x_graph = x.reshape([batch_size, -1, self.node_dim])# to [B, num_car*frame-1, features]
+            # x_graph = torch.sum(x, dim = 1) # lost one dimension, to [B, num_car, features]
+            #print(x_graph.shape)
             x_graph = torch.tensor(x_graph, dtype=torch.float32).to(self.device)
-            A = self.gc(x_graph)
-
-            x1 = self.gcn1(x_graph, A)
-
-            x_agent_feature = x1[:,0,:]
-            h1 = self.lin1(x_agent_feature)
-            h2 = self.lin2(h1)
-            return h2
+            graph_feature_list = []
+            for i in range(self.num_graph):
+                A = self.gc_list[i](x_graph)
+                x1 = self.gcn_list[i](x_graph, A)
+                x1 = self.gcn_layer_norm_list[i](x1)
+                x1 = F.relu(x1)
+                graph_feature_list.append(x1)
+            # 3 parallel graph
+            graph_features = torch.sum(torch.stack(graph_feature_list), dim=0)
+            graph_features = graph_features.reshape([batch_size, self.frame_n-1, self.num_nodes, self.node_dim])
+            if self.max_or_fixed == 'max':
+                graph_features_pooled, _=torch.max(graph_features, dim=2)
+            elif self.max_or_fixed == 'fixed':
+                graph_features_pooled = graph_features[:,:,0,:]
+            graph_features_pooled_flat = graph_features_pooled.reshape([-1, self.node_dim])
+            # x_agent_feature = x1[:,0,:] ###
+            est_pos = self.lin1(graph_features_pooled_flat)
+            est_pos = est_pos.reshape([batch_size, -1, 2])
+            est_pos = torch.mean(est_pos, dim=1).reshape([batch_size, -1])
+            return est_pos
 
 
 

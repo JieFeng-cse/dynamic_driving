@@ -231,7 +231,12 @@ class feature_generator(object):
             i = i + j
         self.end = False
         data = np.array(whole_feature_map)
-        np.save('/home/jonathon/Documents/new_project/interaction-dataset-master/data/track_1_feature.npy',data)
+        base_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data'
+        sce_dir = os.path.join(base_path,'DR_CHN_Merging_ZS')
+        if not os.path.exists(sce_dir):
+            os.makedirs(sce_dir)
+        save_path = os.path.join(sce_dir,str(self.frame_n)+'framesperseg'+os.path.split(self.data_path)[1].split('.')[0]+'.npy')
+        np.save(save_path,data)
         print(data.shape)
 
     def prune(self,path,node_num):
@@ -247,14 +252,15 @@ class feature_generator(object):
 
 if __name__ == '__main__':
     csv_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/recorded_trackfiles/DR_CHN_Merging_ZS/train/segmented/tracks_001.csv'
-    ff = feature_generator(csv_path,3,5)
+    ff = feature_generator(csv_path,40,10)
     print(ff.smallest_A_size_check())
     # print(ff.data_iter_num)
     # print(len(ff.agent_list))
     ff.get_k_tracks()
     print("get k tracks")
-    ff.construct_features()
-    pp = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/track_1_feature.npy'
-    ff.prune(pp,20)
+    # ff.construct_features()
+    # pp = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/track_1_feature.npy'
+    pp = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/DR_CHN_Merging_ZS/40framespersegtracks_001.npy'
+    ff.prune(pp,13)
     
 

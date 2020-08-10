@@ -5,8 +5,8 @@ import time
 import datetime
 import torch
 import torch.nn as nn
-from model import Model
-from dataloader import TemData
+from model import Model, dynamic_model
+from dataloader import TemData, RNNData
 import numpy as np
 import importlib
 import sys
@@ -24,6 +24,8 @@ def evaluate(validation_loader,model,criterion,batch_size,device):
             Lables = Lables.to(device)
             output = (model(Xs)).type(torch.double)
             Lables = (Lables).type(torch.double)
+            output = output.reshape(-1,2)
+            Lables = Lables.reshape(-1,2)
             if i%200 == 0:
                 # print('prediction: ' + str(output[0]) + ' label: ' + str(Lables[0]))
                 print('ground truth:',Lables[0], 'prediction:', output[0])
@@ -46,10 +48,12 @@ def train(dataset_loader,model,criterion,optim, batch_size, device):
     n_smaples = 0
     for Xs, Lables in dataset_loader:
         # model.zero_grad()
-        Xs = Xs.to(device)
-        Lables = Lables.to(device)
-        output = (model(Xs)).type(torch.double)
-        Lables = (Lables).type(torch.double)
+        Xs = torch.tensor(Xs, dtype=torch.double).to(device)
+        Lables = torch.tensor(Lables, dtype=torch.double).to(device)
+        output = (model(Xs)).type(torch.double).to(device)
+        Lables = (Lables).type(torch.double).to(device)
+        output = output.reshape(-1,2)
+        Lables = Lables.reshape(-1,2)
         train_loss = criterion(output, Lables)
         train_loss.type(torch.double)
         optim.optimizer.zero_grad()
@@ -64,6 +68,7 @@ def train(dataset_loader,model,criterion,optim, batch_size, device):
 parser = argparse.ArgumentParser(description='PyTorch traj forecasting')
 parser.add_argument('--epochs', type=int, default=3000,help='upper epoch limit')
 parser.add_argument('--batch_size', type=int, default=128, metavar='N',help='batch size')
+parser.add_argument('--val_batch_size', type=int, default=512, metavar='N',help='batch size')
 parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--mode', type=str, default='train',help='train or test')
 parser.add_argument('--log_interval', type=int, default=2000, metavar='N',help='report interval')
@@ -81,14 +86,15 @@ parser.add_argument('--num_graph',type=int,default=3,help='num_graph')
 parser.add_argument('--lr', type=float, default=0.001)
 parser.add_argument('--clip',type=int,default=5,help='clip')
 parser.add_argument('--seed', type=int, default=54321,help='random seed')
-parser.add_argument('--frame_n', type=int, default=3,help='every case have n frames')
-parser.add_argument('--frame_gap', type=int, default=5,help='frame gap between two agents')
+parser.add_argument('--frame_n', type=int, default=40,help='every case have n frames')
+parser.add_argument('--frame_gap', type=int, default=10,help='frame gap between two agents')
 parser.add_argument('--normalization', type=bool, default=True, help='whether to do batch normalization')
+parser.add_argument('--RNN', type=bool, default=True, help='RNN model')
 
 parser.add_argument('--device',type=str,default='cuda:0',help='')
 parser.add_argument('--buildA_true', type=bool, default=True, help='whether to construct adaptive adjacency matrix')
 parser.add_argument('--node_dim',type=int,default=10,help='dim of nodes')
-parser.add_argument('--node_num',type=int,default=20,help='num of nodes')
+parser.add_argument('--node_num',type=int,default=13,help='num of nodes')
 parser.add_argument('--weight_decay',type=float,default=0.00001,help='weight decay rate')
 args = parser.parse_args()
 
@@ -104,20 +110,30 @@ if torch.cuda.is_available():
         print("WARNING: You have a CUDA device, so you should probably run with --cuda")
     else:
         torch.cuda.manual_seed(args.seed)
+if not args.RNN:
+    npy_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/track_0_feature.npy'
+    val_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/track_1_feature.npy'
 
-npy_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/track_0_feature.npy'
-val_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/track_1_feature.npy'
+    feature_map = TemData(npy_path,args.frame_n,args.device)
+    val_map = TemData(val_path,args.frame_n,args.device)
+else:
+    npy_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/DR_CHN_Merging_ZS/40framespersegtracks_001.npy'
+    val_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/DR_CHN_Merging_ZS/40framespersegtracks_000.npy'
+    feature_map = RNNData(args.frame_n, args.frame_gap,npy_path,args.device)
+    val_map = RNNData(args.frame_n, args.frame_gap,val_path,args.device)
 
-feature_map = TemData(npy_path,args.frame_n,args.device)
-val_map = TemData(val_path,args.frame_n,args.device)
 if args.gpu != None:
     device = torch.device(args.device)
 else:
     device = torch.device('cpu')
 
 
-
-model = Model(args,device,graph_con=args.gc)
+if not args.RNN:
+    model = Model(args,device,graph_con=args.gc)
+    model.double()
+else:
+    model = dynamic_model(args, device)
+    model.double()
 if args.cuda:
     model.cuda()
 
@@ -129,7 +145,7 @@ dataset_loader = Data.DataLoader(dataset=feature_map,
                                                     batch_size=args.batch_size,
                                                     shuffle=args.shuffle, num_workers= 8)
 val_loader = Data.DataLoader(dataset=val_map,
-                                            batch_size=args.batch_size,
+                                            batch_size=args.val_batch_size,
                                             shuffle=args.shuffle, num_workers= 8)
 ttime = str(datetime.datetime.now()).replace(' ','-')
 save_model = args.save+ttime
@@ -140,7 +156,7 @@ try:
         print('begin training')
         for epoch in range(1, args.epochs+1):
             epoch_start_time = time.time()
-            if epoch %1000 == 0:
+            if epoch %800 == 0:
                 new_lr = new_lr / 2
                 adjust_lr(optim.optimizer, new_lr)
             train_loss = train(dataset_loader,model,criterion,optim,args.batch_size,device)

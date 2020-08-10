@@ -12,7 +12,7 @@ from scipy.sparse import linalg
 from torch.autograd import Variable
 import random
 class rnn_encoder(nn.Module):
-    def __init__(self, input_dim = 4, hid_dim = 4, n_layers = 2, dropout = 0.3):
+    def __init__(self, input_dim = 4, hid_dim = 4, n_layers = 2, dropout = 0):
         super(rnn_encoder, self).__init__()
         
         self.hid_dim = hid_dim
@@ -20,11 +20,12 @@ class rnn_encoder(nn.Module):
         
         self.rnn = nn.LSTM(input_dim, hid_dim, n_layers, dropout = dropout,
         bidirectional=True)
-    def forward(self, x):        
+    def forward(self, x): 
+        # print(x.shape)       
         outputs, (hidden, cell) = self.rnn(x)
         hidden = torch.sum(hidden.view(2, 2, -1, 4),dim=1)
         cell = torch.sum(cell.view(2, 2, -1, 4),dim=1)
-        outputs = torch.sum(outputs.view(10, 2, -1, 4),dim=1)
+        outputs = torch.sum(outputs.view(10, -1, 2, 4),dim=1)
         #outputs = [src len, batch size, hid dim * n directions]
         #hidden = [n layers * n directions, batch size, hid dim]
         #cell = [n layers * n directions, batch size, hid dim]
@@ -56,7 +57,7 @@ class Attention(nn.Module):
         return energy.squeeze(1)  # [B*T]
 
 class rnn_decoder(nn.Module):
-    def __init__(self, output_dim=4, hid_dim=4, n_layers=2, dropout=0.3):
+    def __init__(self, output_dim=4, hid_dim=4, n_layers=2, dropout=0):
         super(rnn_decoder, self).__init__()
         
         self.output_dim = output_dim

@@ -21,13 +21,14 @@ def evaluate(validation_loader,model,criterion,batch_size,device):
     with torch.no_grad():
         for Xs,Lables in validation_loader:
             Xs = Xs[:,:,:,1:5]
+            Xs[:,:,:,1:3]-=1
             Xs = Xs.to(device)
             # print(Xs.shape)
             Lables = Lables.to(device)
             output = (model(Xs)).type(torch.double)
             Lables = (Lables[:,0,:]).type(torch.double)
             output = output.reshape(-1,2)
-            Lables = Lables.reshape(-1,2)
+            Lables = Lables.reshape(-1,2)-1
             if i%200 == 0:
                 # print('prediction: ' + str(output[0]) + ' label: ' + str(Lables[0]))
                 print('ground truth:',Lables[0], 'prediction:', output[0])
@@ -51,13 +52,14 @@ def train(dataset_loader,model,criterion,optim, batch_size, device):
     for Xs, Lables in dataset_loader:
         # model.zero_grad()
         Xs = Xs[:,:,:,1:5]
+        Xs[:,:,:,1:3]-=1
         Xs = torch.tensor(Xs, dtype=torch.double).to(device)
         Lables = torch.tensor(Lables, dtype=torch.double).to(device)
         Lables = Lables[:,0,:]
         output = (model(Xs)).type(torch.double).to(device)
         Lables = (Lables).type(torch.double).to(device)
         output = output.reshape(-1,2)
-        Lables = Lables.reshape(-1,2)
+        Lables = Lables.reshape(-1,2)-1
         train_loss = criterion(output, Lables)
         train_loss.type(torch.double)
         optim.optimizer.zero_grad()

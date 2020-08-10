@@ -12,7 +12,7 @@ from scipy.sparse import linalg
 from torch.autograd import Variable
 import random
 class rnn_encoder(nn.Module):
-    def __init__(self, input_dim = 8, hid_dim = 8, n_layers = 2, dropout = 0.3):
+    def __init__(self, input_dim = 4, hid_dim = 4, n_layers = 2, dropout = 0.3):
         super(rnn_encoder, self).__init__()
         
         self.hid_dim = hid_dim
@@ -22,9 +22,9 @@ class rnn_encoder(nn.Module):
         bidirectional=True)
     def forward(self, x):        
         outputs, (hidden, cell) = self.rnn(x)
-        hidden = torch.sum(hidden.view(2, 2, -1, 8),dim=1)
-        cell = torch.sum(cell.view(2, 2, -1, 8),dim=1)
-        outputs = torch.sum(outputs.view(10, 2, -1, 8),dim=1)
+        hidden = torch.sum(hidden.view(2, 2, -1, 4),dim=1)
+        cell = torch.sum(cell.view(2, 2, -1, 4),dim=1)
+        outputs = torch.sum(outputs.view(10, 2, -1, 4),dim=1)
         #outputs = [src len, batch size, hid dim * n directions]
         #hidden = [n layers * n directions, batch size, hid dim]
         #cell = [n layers * n directions, batch size, hid dim]
@@ -56,15 +56,15 @@ class Attention(nn.Module):
         return energy.squeeze(1)  # [B*T]
 
 class rnn_decoder(nn.Module):
-    def __init__(self, output_dim=8, hid_dim=8, n_layers=2, dropout=0.3):
+    def __init__(self, output_dim=4, hid_dim=4, n_layers=2, dropout=0.3):
         super(rnn_decoder, self).__init__()
         
         self.output_dim = output_dim
         self.hid_dim = hid_dim
         self.n_layers = n_layers
-        self.feature_dim = 8        
+        self.feature_dim = 4
         self.attention = Attention(self.hid_dim)
-        self.rnn = nn.LSTM(self.feature_dim*2, hid_dim, n_layers, dropout = dropout)
+        self.rnn = nn.LSTM(self.feature_dim, hid_dim, n_layers, dropout = dropout)
         
         self.fc_out = nn.Linear(hid_dim, output_dim)
         
@@ -76,10 +76,10 @@ class rnn_decoder(nn.Module):
         #context = [n layers, batch size, hid dim]
         
         input = input.unsqueeze(0)     #input = [1, batch size]
-        attn_weights = self.attention(hidden,encoder_outputs)
-        context = attn_weights.bmm(encoder_outputs.transpose(0,1))
-        context = context.transpose(0,1) #(1,b,n)        
-        output, (hidden, cell) = self.rnn(torch.cat([input,context],2), (hidden, cell))
+        # attn_weights = self.attention(hidden,encoder_outputs)
+        # context = attn_weights.bmm(encoder_outputs.transpose(0,1))
+        # context = context.transpose(0,1) #(1,b,n)        
+        output, (hidden, cell) = self.rnn(input, (hidden, cell))
         #seq len and n directions will always be 1 in the decoder, therefore:
         #output = [1, batch size, hid dim]
         #hidden = [n layers, batch size, hid dim]
@@ -91,7 +91,7 @@ class rnn_decoder(nn.Module):
         return prediction, hidden, cell
 
 class rnn_model(nn.Module):
-    def __init__(self, encoder, decoder, device, hid_dim = 8, output_dim = 2):
+    def __init__(self, encoder, decoder, device, hid_dim = 4, output_dim = 2):
         super(rnn_model, self).__init__()
         
         self.encoder = encoder
@@ -118,30 +118,36 @@ class rnn_model(nn.Module):
         trg_vocab_size = self.decoder.output_dim
         
         #tensor to store decoder outputs
-        outputs = torch.zeros(trg_len, batch_size, trg_vocab_size).to(self.device)
+        outputs = torch.zeros(trg_len - 1, batch_size, trg_vocab_size).to(self.device)
         
         #last hidden state of the encoder is used as the initial hidden state of the decoder
         enc_outputs, hidden, cell = self.encoder(src)
         
         #first input to the decoder is the <sos> tokens
         input = trg[0,:]
-        
-        for t in range(1, trg_len):
-            
-            #insert input token embedding, previous hidden and previous cell states
-            #receive output tensor (predictions) and new hidden and cell states
+        for t in range(trg_len - 1):
             output, hidden, cell = self.decoder(input, hidden, cell, enc_outputs)
-            
-            #place predictions in a tensor holding predictions for each token
             outputs[t] = output.squeeze()
+            input = output
+
+        # for t in range(1, trg_len):
             
-            #decide if we are going to use teacher forcing or not
-            teacher_force = random.random() < teacher_forcing_ratio
+        #     #insert input token embedding, previous hidden and previous cell states
+        #     #receive output tensor (predictions) and new hidden and cell states
+        #     output, hidden, cell = self.decoder(input, hidden, cell, enc_outputs)
             
-            input = trg[t] if teacher_force else output
+        #     #place predictions in a tensor holding predictions for each token
+        #     outputs[t] = output.squeeze()
+            
+        #     #decide if we are going to use teacher forcing or not
+        #     teacher_force = random.random() < teacher_forcing_ratio
+            
+        #     input = trg[t] if teacher_force else output
         outputs = torch.tensor(outputs,dtype=torch.double).to(self.device)
-        predictions = self.fc_out(outputs[1:]) #(frame_n - frame_gap) * batch_size * 2 
-        return predictions.permute(1,0,2).reshape(-1, self.output_dim)
+        predictions = self.fc_out(outputs) #(frame_n - frame_gap) * batch_size * 2 
+        # return predictions.permute(1,0,2).reshape(-1, self.output_dim)
+        # print(predictions.shape)
+        return predictions[0]
 
 class dynamic_model(nn.Module):
     def __init__(self,args, device, dropout = 0.3, node_dim = 10):
@@ -157,20 +163,22 @@ class dynamic_model(nn.Module):
         self.num_graph = args.num_graph
         self.frame_gap = args.frame_gap
         if args.normalization:
-            self.layer_norm_list = nn.ModuleList([ nn.LayerNorm([self.num_nodes, 8]) for i in range(self.frame_gap) ])
-        self.gc_list = torch.nn.ModuleList([similarity_graph_constructor(self.num_nodes,8,10,self.device) for i in range(self.frame_gap)])
-        self.gcn1_list = torch.nn.ModuleList([DenseGCNConv(10,16) for i in range(self.frame_gap)])
-        self.gcn2_list = torch.nn.ModuleList([DenseGCNConv(16,8) for i in range(self.frame_gap)])
+            self.layer_norm_list = nn.ModuleList([ nn.LayerNorm([self.num_nodes, 4]) for i in range(self.frame_gap) ])
+        self.gc_list = torch.nn.ModuleList([similarity_graph_constructor(self.num_nodes,8,4,self.device) for i in range(self.frame_gap)])
+        self.gcn1_list = torch.nn.ModuleList([DenseGCNConv(4,16) for i in range(self.frame_gap)])
+        self.gcn2_list = torch.nn.ModuleList([DenseGCNConv(16,4) for i in range(self.frame_gap)])
         self.rnn_encoder = rnn_encoder().double()
         self.rnn_decoder = rnn_decoder().double()
         self.rnn_model = rnn_model(self.rnn_encoder, self.rnn_decoder,self.device).double()
         # self.no_gcn = True
-        self.proj = torch.nn.ModuleList([nn.Linear(10,8) for i in range(self.frame_gap)])
+        self.proj1 = torch.nn.ModuleList([nn.Linear(4,16) for i in range(self.frame_gap)])
+        self.proj2 = torch.nn.ModuleList([nn.Linear(16,4) for i in range(self.frame_gap)])
 
     def forward(self, X):
         encoder_frames = []
         gt_frames = []
         X = torch.tensor(X,dtype=torch.double).to(self.device)
+        # print(X.shape)
         for i in range(self.frame_n):
             if i < self.frame_gap:
                 encoder_frames.append(X[:,i,:,:].clone())
@@ -199,10 +207,10 @@ class dynamic_model(nn.Module):
                 x2 = self.gcn2_list[i](x1, encoder_adj)
                 x2 = self.layer_norm_list[i](x2)
                 x2 = F.relu(x2)
-                agent_feature = F.relu(self.proj[i](encoder_frames[i,:,0,:]))
-                encodered_agent_features.append(x2[:,0,:].clone()*0.1 + agent_feature)
+                agent_feature = F.relu(self.proj2[i](self.proj1[i](encoder_frames[i,:,0,:])))
+                encodered_agent_features.append(agent_feature)
                 if i == self.frame_gap - 1:
-                    gt_agent_features.append(x2[:,0,:].clone()*0.1 + agent_feature)
+                    gt_agent_features.append(agent_feature)
             else:
                 j = round(torch.rand(1).item()*(self.frame_gap - 1))
                 gt_adj = F.relu(self.gc_list[j](gt_frames[i-self.frame_gap]))
@@ -210,8 +218,8 @@ class dynamic_model(nn.Module):
                 x2 = self.gcn2_list[j](x1, gt_adj)
                 x2 = self.layer_norm_list[j](x2)
                 x2 = F.relu(x2)
-                gt_feature = F.relu(self.proj[j](gt_frames[i-self.frame_gap,:,0,:]))
-                gt_agent_features.append(x2[:,0,:].clone()*0.1+gt_feature)
+                gt_feature = F.relu(self.proj2[j](self.proj1[j](gt_frames[i-self.frame_gap,:,0,:])))
+                gt_agent_features.append(gt_feature)
         encodered_agent_features = torch.stack(encodered_agent_features).to(self.device)
         gt_agent_features = torch.stack(gt_agent_features).to(self.device) #seq_len * batch_size * node_dim
         # print(encodered_agent_features.shape)
@@ -221,7 +229,7 @@ class dynamic_model(nn.Module):
 
 
 class similarity_graph_constructor(nn.Module):
-    def __init__(self, nnodes, k, dim, device, alpha=3, feature_dim = 10, static_feat =1):
+    def __init__(self, nnodes, k, dim, device, alpha=3, feature_dim = 4, static_feat =1):
         super(similarity_graph_constructor, self).__init__()
         # print("icra model")
         self.nnodes = nnodes

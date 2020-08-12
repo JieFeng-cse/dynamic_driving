@@ -12,6 +12,9 @@ import importlib
 import sys
 import Optim
 from torch.optim.lr_scheduler import LambdaLR
+from torch.autograd import Variable
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+
 import torch.utils.data as Data
 def evaluate(validation_loader,model,criterion,batch_size,device):
     model.eval()
@@ -19,27 +22,35 @@ def evaluate(validation_loader,model,criterion,batch_size,device):
     n_smaples = 0
     i = 0
     with torch.no_grad():
-        for Xs,Lables in validation_loader:
+        for Xs,Labels in validation_loader:
             Xs = Xs[:,:,:,1:5]
-            Xs[:,:,:,1:3]-=1
+            # Xs[:,:,:,0:2]-=1
+            # Xs[:,:,:,1:3] *= 1000
             Xs = Xs.to(device)
             # print(Xs.shape)
-            Lables = Lables.to(device)
+            Labels = Labels.to(device)
             output = (model(Xs)).type(torch.double)
-            Lables = (Lables[:,0,:]).type(torch.double)
+            Labels = (Labels[:,:,:]).type(torch.double)
+            Labels = Labels.permute(1,0,2).contiguous()
+            # print(Labels.shape)
             output = output.reshape(-1,2)
-            Lables = Lables.reshape(-1,2)-1
+            Labels = Labels.reshape(-1,2)
             if i%200 == 0:
-                # print('prediction: ' + str(output[0]) + ' label: ' + str(Lables[0]))
-                print('ground truth:',Lables[0], 'prediction:', output[0])
-            val_loss = criterion(output, Lables)
+                # print('prediction: ' + str(output[0]) + ' label: ' + str(Labels[0]))
+                # print(Labels.shape)
+                print('ground truth:',Labels[0], 'prediction:', output[0])
+                L = np.mean((Labels.cpu().numpy() - output.cpu().numpy())**2)
+                print(L, criterion(output, Labels))
+
+            val_loss = criterion(output, Labels)
+            # val_loss = ((output - Labels)**2).mean()
             val_loss.type(torch.double)
 
             total_loss += val_loss.item()
-            n_smaples += output.shape[0]
+            n_smaples += output.shape[0]/30
             i += 1
             torch.cuda.empty_cache()
-    return total_loss / n_smaples
+    return total_loss / i
 
 def adjust_lr(optimizer,new_lr):
     print("Changing learning rate to ",new_lr)
@@ -49,27 +60,42 @@ def train(dataset_loader,model,criterion,optim, batch_size, device):
     model.train()
     total_loss = 0
     n_smaples = 0
-    for Xs, Lables in dataset_loader:
+    i = 0
+    for Xs, Labels in dataset_loader:
         # model.zero_grad()
         Xs = Xs[:,:,:,1:5]
-        Xs[:,:,:,1:3]-=1
-        Xs = torch.tensor(Xs, dtype=torch.double).to(device)
-        Lables = torch.tensor(Lables, dtype=torch.double).to(device)
-        Lables = Lables[:,0,:]
+        # Xs[:,:,:,1:3] *= 1000
+        Xs = Variable(torch.tensor(Xs, dtype=torch.double)).to(device)
+        # print("label 1 : {}".format(Labels.shape))
+        # print(Labels)
+
+        Labels = Variable(torch.tensor(Labels, dtype=torch.double)).to(device)
+        
         output = (model(Xs)).type(torch.double).to(device)
-        Lables = (Lables).type(torch.double).to(device)
-        output = output.reshape(-1,2)
-        Lables = Lables.reshape(-1,2)-1
-        train_loss = criterion(output, Lables)
+
+        # print("label 2 : {}".format(Labels.shape))
+        
+        Labels = Labels.permute(1,0,2).contiguous()
+        Labels = (Labels).type(torch.double).to(device)
+        output = output.reshape(-1,2).contiguous()
+        Labels = Labels.reshape(-1,2).contiguous()
+        
+        # print("label 3 : {}".format(Labels.shape))
+        # print("outputs:")
+        # print("out", output)
+        # print("label", Labels)
+
+        train_loss = criterion(output, Labels)
+        # train_loss = ((output - Labels)**2).mean()
         train_loss.type(torch.double)
         optim.optimizer.zero_grad()
         train_loss.backward()
-
+        i += 1
         total_loss += train_loss.item()
-        n_smaples += output.shape[0]
+        n_smaples += output.shape[0]/30
         grad_norm = optim.step()
         # torch.cuda.empty_cache()
-    return total_loss / n_smaples
+    return total_loss / i
 
 parser = argparse.ArgumentParser(description='PyTorch traj forecasting')
 parser.add_argument('--epochs', type=int, default=3000,help='upper epoch limit')
@@ -143,7 +169,8 @@ else:
 if args.cuda:
     model.cuda()
 
-criterion = nn.MSELoss(size_average = False).cuda()
+#criterion = nn.MSELoss(size_average = False).cuda()
+criterion = nn.MSELoss().cuda()
 optim = Optim.Optim(
     model.parameters(), args.optim, args.lr, args.clip,lr_decay=args.weight_decay
 )
@@ -157,6 +184,10 @@ ttime = str(datetime.datetime.now()).replace(' ','-')
 save_model = args.save+ttime
 best_val = 1000
 new_lr = args.lr
+# for i in model.state_dict():
+#     print(i)
+# lr_scheduler = ReduceLROnPlateau(optim,  mode='min', factor=0.5, patience=20, verbose=True)
+
 try:
     if args.mode == 'train':
         print('begin training')
@@ -167,12 +198,16 @@ try:
                 adjust_lr(optim.optimizer, new_lr)
             train_loss = train(dataset_loader,model,criterion,optim,args.batch_size,device)
             val_loss = evaluate(val_loader,model,criterion,args.batch_size,device)
-            print('| end of epoch {:3d} | time: {:5.2f}s | train_loss {:5.9f} | val_loss {:5.9f} |'.format(epoch,(time.time()-epoch_start_time),math.sqrt(train_loss*1000000),math.sqrt(val_loss*1000000)))
+            print('| end of epoch {:3d} | time: {:5.2f}s | train_loss {:5.9f} | val_loss {:5.9f} |'.format(epoch,(time.time()-epoch_start_time),math.sqrt(train_loss*1000000),math.sqrt(val_loss*1000000))) #*1000000
             if val_loss < best_val:
                 p = os.path.join(args.save,args.gc +'best_model.pt')
                 torch.save(model, p)
                 best_val = val_loss
                 print(best_val)
+            # for name, param in model.named_parameters():
+            #     if param.grad != None:
+            #         print('Name: ', name, 'if_grad: ', param.requires_grad)
+            #         print('grad_value: ', param.grad)
     elif args.mode == 'test':
         print('begin testing')
         p = os.path.join(args.save,args.gc +'best_model.pt')

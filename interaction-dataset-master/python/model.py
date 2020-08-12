@@ -17,15 +17,18 @@ class rnn_encoder(nn.Module):
         
         self.hid_dim = hid_dim
         self.n_layers = n_layers
-        
+        self.ln = nn.Linear(4,input_dim)
         self.rnn = nn.LSTM(input_dim, hid_dim, n_layers, dropout = dropout,
         bidirectional=True)
+        for i in range(len(self.rnn.all_weights)):
+            nn.init.orthogonal_(self.rnn.all_weights[i][0])
     def forward(self, x): 
-        # print(x.shape)       
+        # print(x.shape)   
+        x = self.ln(x)    
         outputs, (hidden, cell) = self.rnn(x)
-        hidden = torch.sum(hidden.view(2, 2, -1, 4),dim=1)
-        cell = torch.sum(cell.view(2, 2, -1, 4),dim=1)
-        outputs = torch.sum(outputs.view(10, -1, 2, 4),dim=1)
+        hidden = torch.sum(hidden.view(2, 2, -1, self.hid_dim),dim=1)
+        cell = torch.sum(cell.view(2, 2, -1, self.hid_dim),dim=1)
+        outputs = torch.sum(outputs.view(10, -1, 2, self.hid_dim),dim=2)
         #outputs = [src len, batch size, hid dim * n directions]
         #hidden = [n layers * n directions, batch size, hid dim]
         #cell = [n layers * n directions, batch size, hid dim]
@@ -63,10 +66,11 @@ class rnn_decoder(nn.Module):
         self.output_dim = output_dim
         self.hid_dim = hid_dim
         self.n_layers = n_layers
-        self.feature_dim = 4
+        self.input_dim = 4
         self.attention = Attention(self.hid_dim)
-        self.rnn = nn.LSTM(self.feature_dim, hid_dim, n_layers, dropout = dropout)
-        
+        self.rnn = nn.LSTM(output_dim, hid_dim, n_layers, dropout = dropout)
+        for i in range(len(self.rnn.all_weights)):
+            nn.init.orthogonal_(self.rnn.all_weights[i][0])
         self.fc_out = nn.Linear(hid_dim, output_dim)
         
         self.dropout = nn.Dropout(dropout)
@@ -79,13 +83,13 @@ class rnn_decoder(nn.Module):
         input = input.unsqueeze(0)     #input = [1, batch size]
         # attn_weights = self.attention(hidden,encoder_outputs)
         # context = attn_weights.bmm(encoder_outputs.transpose(0,1))
-        # context = context.transpose(0,1) #(1,b,n)        
+        # context = context.transpose(0,1) #(1,b,n)      
         output, (hidden, cell) = self.rnn(input, (hidden, cell))
         #seq len and n directions will always be 1 in the decoder, therefore:
         #output = [1, batch size, hid dim]
         #hidden = [n layers, batch size, hid dim]
         #cell = [n layers, batch size, hid dim]
-        prediction = self.fc_out(output.squeeze(0))
+        prediction = F.relu(self.fc_out(output.squeeze(0)))
         
         #prediction = [batch size, output dim]
         
@@ -100,13 +104,15 @@ class rnn_model(nn.Module):
         self.device = device
         self.fc_out = nn.Linear(hid_dim, output_dim)
         self.output_dim = output_dim
-        
+        self.input_dim = 4
+        self.fc_in = nn.Linear(self.input_dim, 4)
+        self.linear_list = nn.ModuleList([nn.Linear(self.input_dim, 4) for i in range(30)])
         assert encoder.hid_dim == decoder.hid_dim, \
             "Hidden dimensions of encoder and decoder must be equal!"
         assert encoder.n_layers == decoder.n_layers, \
             "Encoder and decoder must have equal number of layers!"
         
-    def forward(self, src, trg, teacher_forcing_ratio = 0.1):
+    def forward(self, src, trg, teacher_forcing_ratio = 1):
         
         #src = [src len, batch size, feature_dim]
         #trg = [trg len, batch size, feature_dim]
@@ -115,7 +121,7 @@ class rnn_model(nn.Module):
         
         batch_size = trg.shape[1]
         trg_len = trg.shape[0]
-        # print(trg_len)
+        # print("target : {}, {}".format(type(trg), trg.shape))
         trg_vocab_size = self.decoder.output_dim
         
         #tensor to store decoder outputs
@@ -125,11 +131,18 @@ class rnn_model(nn.Module):
         enc_outputs, hidden, cell = self.encoder(src)
         
         #first input to the decoder is the <sos> tokens
-        input = trg[0,:]
+        input = trg[0]
+        # print("trg_shape: ", trg.shape)
+        # print("input: ", input.shape)
+        # print("hidden: ", hidden.shape)
+        input = F.relu(self.fc_in(input))
+        # print(input.shape)
         for t in range(trg_len - 1):
             output, hidden, cell = self.decoder(input, hidden, cell, enc_outputs)
             outputs[t] = output.squeeze()
-            input = output
+            teacher_force = random.random() < teacher_forcing_ratio
+            input = F.relu(self.linear_list[t](trg[t+1])) if teacher_force else output
+            # input = output
 
         # for t in range(1, trg_len):
             
@@ -144,11 +157,14 @@ class rnn_model(nn.Module):
         #     teacher_force = random.random() < teacher_forcing_ratio
             
         #     input = trg[t] if teacher_force else output
-        outputs = torch.tensor(outputs,dtype=torch.double).to(self.device)
+        # outputs = torch.tensor(outputs,dtype=torch.double).to(self.device)
+
+        # print("final outputs shape : {}".format(outputs.shape))
+        outputs = outputs.double()
         predictions = self.fc_out(outputs) #(frame_n - frame_gap) * batch_size * 2 
         # return predictions.permute(1,0,2).reshape(-1, self.output_dim)
         # print(predictions.shape)
-        return predictions[0]
+        return predictions
 
 class dynamic_model(nn.Module):
     def __init__(self,args, device, dropout = 0.3, node_dim = 10):
@@ -187,7 +203,7 @@ class dynamic_model(nn.Module):
                 gt_frames.append(X[:,i,:,:].clone())
         gt_frames = torch.stack(gt_frames).type(torch.double).to(self.device)
         encoder_frames = torch.stack(encoder_frames).type(torch.double).to(self.device)
-        
+        # print("encoder_frames: ", encoder_frames.shape)
         encodered_agent_features = [] #seq_len * batch_size * node_dim
         gt_agent_features = []
         # if self.no_gcn:
@@ -196,31 +212,33 @@ class dynamic_model(nn.Module):
         #             agent_feature = F.relu(self.proj[i](encoder_frames[i,:,0,:]))
         #             encodered_agent_features.append(agent_feature.clone())
         #             if i == self.frame_gap - 1:
-        #                 gt_agent_features.append(agent_feature.clone())
+        #                 gt_agent_features.append(agent_f  eature.clone())
         #         else:
         #             j = round(torch.rand(1).item()*(self.frame_gap - 1))
         #             gt_feature = F.relu(self.proj[j](gt_frames[i-self.frame_gap,:,0,:]))
         #             gt_agent_features.append(agent_feature.clone())
         for i in range(self.frame_n):
             if i < self.frame_gap:
-                encoder_adj = F.relu(self.gc_list[i](encoder_frames[i]))
-                x1 = F.relu(self.gcn1_list[i](encoder_frames[i],encoder_adj))
-                x2 = self.gcn2_list[i](x1, encoder_adj)
-                x2 = self.layer_norm_list[i](x2)
-                x2 = F.relu(x2)
-                agent_feature = F.relu(self.proj2[i](self.proj1[i](encoder_frames[i,:,0,:])))
-                encodered_agent_features.append(agent_feature)
+                # encoder_adj = F.relu(self.gc_list[i](encoder_frames[i]))
+                # x1 = F.relu(self.gcn1_list[i](encoder_frames[i],encoder_adj))
+                # x2 = self.gcn2_list[i](x1, encoder_adj)
+                # x2 = self.layer_norm_list[i](x2)
+                # x2 = F.relu(x2)
+                # agent_feature = F.relu(self.proj2[i](self.proj1[i](encoder_frames[i,:,0,:])))
+                agent_feature = encoder_frames[i,:,0,:]
+                encodered_agent_features.append(agent_feature.clone())
                 if i == self.frame_gap - 1:
-                    gt_agent_features.append(agent_feature)
+                    gt_agent_features.append(agent_feature.clone())
             else:
                 j = round(torch.rand(1).item()*(self.frame_gap - 1))
-                gt_adj = F.relu(self.gc_list[j](gt_frames[i-self.frame_gap]))
-                x1 = F.relu(self.gcn1_list[j](gt_frames[i-self.frame_gap],gt_adj))
-                x2 = self.gcn2_list[j](x1, gt_adj)
-                x2 = self.layer_norm_list[j](x2)
-                x2 = F.relu(x2)
-                gt_feature = F.relu(self.proj2[j](self.proj1[j](gt_frames[i-self.frame_gap,:,0,:])))
-                gt_agent_features.append(gt_feature)
+                # gt_adj = F.relu(self.gc_list[j](gt_frames[i-self.frame_gap]))
+                # x1 = F.relu(self.gcn1_list[j](gt_frames[i-self.frame_gap],gt_adj))
+                # x2 = self.gcn2_list[j](x1, gt_adj)
+                # x2 = self.layer_norm_list[j](x2)
+                # x2 = F.relu(x2)
+                # gt_feature = F.relu(self.proj2[j](self.proj1[j](gt_frames[i-self.frame_gap,:,0,:])))
+                gt_feature = gt_frames[i-self.frame_gap,:,0,:]
+                gt_agent_features.append(gt_feature.clone())
         encodered_agent_features = torch.stack(encodered_agent_features).to(self.device)
         gt_agent_features = torch.stack(gt_agent_features).to(self.device) #seq_len * batch_size * node_dim
         # print(encodered_agent_features.shape)

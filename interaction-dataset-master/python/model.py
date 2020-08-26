@@ -11,6 +11,25 @@ import scipy.sparse as sp
 from scipy.sparse import linalg
 from torch.autograd import Variable
 import random
+def proj_mat(theta, device, X, Y):
+    
+    X = X.unsqueeze_(-1).unsqueeze_(-1)
+    Y = Y.unsqueeze_(-1).unsqueeze_(-1)
+    R11 = torch.cos(theta).unsqueeze_(-1).unsqueeze_(-1)
+    R12 = -torch.sin(theta).unsqueeze_(-1).unsqueeze_(-1)
+    R21 = torch.sin(theta).unsqueeze_(-1).unsqueeze_(-1)
+    R22 = torch.cos(theta).unsqueeze_(-1).unsqueeze_(-1)
+
+    R1 = torch.cat([R11,R12,-R11*X-R12*Y],dim=2)
+    R2 = torch.cat([R21,R22,-R21*X-R22*Y],dim=2)
+    R3 = torch.zeros([X.shape[0],1,3]).to(device).double()
+    R3[:,:,2] = 1
+    R = torch.cat([R1,R2,R3],dim = 1)
+    # print(R[0])
+    # print(theta[0])
+    # print(torch.sin(theta[0]),torch.cos(theta[0]))
+    # R = torch.tensor([[np.sin(theta),np.cos(theta)],[-np.cos(theta),np.sin(theta)]]).to(device)
+    return R
 class rnn_encoder(nn.Module):
     def __init__(self, input_dim = 4, hid_dim = 4, n_layers = 2, dropout = 0):
         super(rnn_encoder, self).__init__()
@@ -191,16 +210,33 @@ class dynamic_model(nn.Module):
         self.proj1 = torch.nn.ModuleList([nn.Linear(4,16) for i in range(self.frame_gap)])
         self.proj2 = torch.nn.ModuleList([nn.Linear(16,4) for i in range(self.frame_gap)])
 
-    def forward(self, X):
+    def forward(self, X): #X: batchsize * seq_len * node_num * dim
         encoder_frames = []
         gt_frames = []
         X = torch.tensor(X,dtype=torch.double).to(self.device)
-        # print(X.shape)
+        psi = torch.atan2(X[:,0,0,3],X[:,0,0,2])
+        R = proj_mat(psi,self.device,X[:,0,0,0].clone(),X[:,0,0,1].clone())
+        pos_transed = torch.matmul(R.unsqueeze_(1).repeat(1,40,1,1),torch.cat([X[:,:,0,0:2].unsqueeze(2),torch.ones([X.shape[0],X.shape[1],1,1]).to(self.device).double()],dim=3).transpose(2,3))
+        pos_transed = pos_transed.squeeze()
+        vel = X[:,:,0,2:].clone()
+        # print(pos_transed.shape)
+        # print(psi.shape)
+        psi = psi.unsqueeze(-1).repeat([1,40])
+        # print(psi.shape)
+        # print(vel.shape)
+        vel_transed = vel.clone()
+        vel_transed[:,:,0] = torch.mul(vel[:,:,0],torch.cos(psi)) + torch.mul(vel[:,:,1],torch.sin(psi))
+        vel_transed[:,:,1] = torch.mul(-vel[:,:,0],torch.sin(psi)) + torch.mul(vel[:,:,1],torch.cos(psi))
+        XX = torch.cat([pos_transed[:,:,0:2],vel_transed],dim = 2)
+        # print(XX.shape)
+        # print("pos",pos_transed.shape)
+        # print("R",R.repeat(1,40,1,1).shape,R.repeat(1,40,1,1)[0][0])
+        
         for i in range(self.frame_n):
             if i < self.frame_gap:
-                encoder_frames.append(X[:,i,:,:].clone())
+                encoder_frames.append(XX[:,i,:].clone())
             else:
-                gt_frames.append(X[:,i,:,:].clone())
+                gt_frames.append(XX[:,i,:].clone())
         gt_frames = torch.stack(gt_frames).type(torch.double).to(self.device)
         encoder_frames = torch.stack(encoder_frames).type(torch.double).to(self.device)
         # print("encoder_frames: ", encoder_frames.shape)
@@ -225,7 +261,7 @@ class dynamic_model(nn.Module):
                 # x2 = self.layer_norm_list[i](x2)
                 # x2 = F.relu(x2)
                 # agent_feature = F.relu(self.proj2[i](self.proj1[i](encoder_frames[i,:,0,:])))
-                agent_feature = encoder_frames[i,:,0,:]
+                agent_feature = encoder_frames[i,:,:]
                 encodered_agent_features.append(agent_feature.clone())
                 if i == self.frame_gap - 1:
                     gt_agent_features.append(agent_feature.clone())
@@ -237,14 +273,14 @@ class dynamic_model(nn.Module):
                 # x2 = self.layer_norm_list[j](x2)
                 # x2 = F.relu(x2)
                 # gt_feature = F.relu(self.proj2[j](self.proj1[j](gt_frames[i-self.frame_gap,:,0,:])))
-                gt_feature = gt_frames[i-self.frame_gap,:,0,:]
+                gt_feature = gt_frames[i-self.frame_gap,:,:]
                 gt_agent_features.append(gt_feature.clone())
         encodered_agent_features = torch.stack(encodered_agent_features).to(self.device)
         gt_agent_features = torch.stack(gt_agent_features).to(self.device) #seq_len * batch_size * node_dim
         # print(encodered_agent_features.shape)
         # print(gt_agent_features.shape)
         predictions = self.rnn_model(encodered_agent_features, gt_agent_features)
-        return predictions      
+        return R, predictions      
 
 
 class similarity_graph_constructor(nn.Module):

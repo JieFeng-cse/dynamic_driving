@@ -5,8 +5,9 @@ import time
 import datetime
 import torch
 import torch.nn as nn
-from model import Model, dynamic_model
+from model import Model, dynamic_model, proj_mat
 from dataloader import TemData, RNNData
+from torch.autograd import grad
 import numpy as np
 import importlib
 import sys
@@ -14,23 +15,34 @@ import Optim
 from torch.optim.lr_scheduler import LambdaLR
 from torch.autograd import Variable
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from extract_osm import *
+from sub_graph import *
+from dataloader_osm import vectors_car_road
+from fourier_model import Model_COS
 
 import torch.utils.data as Data
 def evaluate(validation_loader,model,criterion,batch_size,device):
     model.eval()
     total_loss = 0
-    n_smaples = 0
+    n_samples = 0
     i = 0
     with torch.no_grad():
         for Xs,Labels in validation_loader:
             Xs = Xs[:,:,:,1:5]
-            # Xs[:,:,:,0:2]-=1
-            # Xs[:,:,:,1:3] *= 1000
             Xs = Xs.to(device)
             # print(Xs.shape)
             Labels = Labels.to(device)
-            output = (model(Xs)).type(torch.double)
             Labels = (Labels[:,:,:]).type(torch.double)
+
+            R, output = model(Xs)
+            R = R.type(torch.double).to(device)
+            output = output.type(torch.double).to(device)
+
+            Labels_transed = torch.matmul(R.repeat(1,30,1,1),
+                torch.cat([Labels[:,:,0:2].unsqueeze(2),torch.ones([Labels.shape[0],Labels.shape[1],1,1]).to(device).double()],dim=3).transpose(2,3))
+            Labels_transed = Labels_transed.squeeze()
+            Labels = Labels_transed[:,:,0:2]
+
             Labels = Labels.permute(1,0,2).contiguous()
             # print(Labels.shape)
             output = output.reshape(-1,2)
@@ -47,7 +59,7 @@ def evaluate(validation_loader,model,criterion,batch_size,device):
             val_loss.type(torch.double)
 
             total_loss += val_loss.item()
-            n_smaples += output.shape[0]/30
+            n_samples += output.shape[0]/30
             i += 1
             torch.cuda.empty_cache()
     return total_loss / i
@@ -59,43 +71,95 @@ def adjust_lr(optimizer,new_lr):
 def train(dataset_loader,model,criterion,optim, batch_size, device):
     model.train()
     total_loss = 0
-    n_smaples = 0
+    n_samples = 0
     i = 0
     for Xs, Labels in dataset_loader:
         # model.zero_grad()
         Xs = Xs[:,:,:,1:5]
-        # Xs[:,:,:,1:3] *= 1000
         Xs = Variable(torch.tensor(Xs, dtype=torch.double)).to(device)
-        # print("label 1 : {}".format(Labels.shape))
-        # print(Labels)
 
         Labels = Variable(torch.tensor(Labels, dtype=torch.double)).to(device)
+        R, output = model(Xs)
+        R = R.type(torch.double).to(device)
+        output = output.type(torch.double).to(device)
         
-        output = (model(Xs)).type(torch.double).to(device)
-
-        # print("label 2 : {}".format(Labels.shape))
-        
-        Labels = Labels.permute(1,0,2).contiguous()
-        Labels = (Labels).type(torch.double).to(device)
         output = output.reshape(-1,2).contiguous()
-        Labels = Labels.reshape(-1,2).contiguous()
+        Labels_transed = torch.matmul(R.repeat(1,30,1,1),
+            torch.cat([Labels[:,:,0:2].unsqueeze(2),torch.ones([Labels.shape[0],Labels.shape[1],1,1]).to(device).double()],dim=3).transpose(2,3))
+        # print(Labels_transed.shape)
+        Labels_transed = Labels_transed.squeeze()
+        Labels = Labels_transed[:,:,0:2]
+        Labels = Labels.permute(1,0,2).contiguous()
+        # print(Labels.shape)
+        Labels = (Labels).type(torch.double).to(device)
         
-        # print("label 3 : {}".format(Labels.shape))
-        # print("outputs:")
-        # print("out", output)
-        # print("label", Labels)
+        Labels = Labels.reshape(-1,2).contiguous()
 
         train_loss = criterion(output, Labels)
-        # train_loss = ((output - Labels)**2).mean()
         train_loss.type(torch.double)
         optim.optimizer.zero_grad()
         train_loss.backward()
         i += 1
         total_loss += train_loss.item()
-        n_smaples += output.shape[0]/30
+        n_samples += output.shape[0]/30
         grad_norm = optim.step()
         # torch.cuda.empty_cache()
     return total_loss / i
+
+def train_fourier(dataset_loader,model,criterion,optim, batch_size, device):
+    model.train()
+    total_loss = 0
+    n_samples = 0
+    i = 0
+    for Xs, Labels in dataset_loader:
+        Xs = Variable(torch.tensor(Xs, dtype=torch.double)).to(device)
+        Labels = Variable(torch.tensor(Labels, dtype=torch.double)).to(device)
+        t = torch.arange(start = 0, end = 40, step = 1).unsqueeze(0).repeat(Labels.shape[0],1)
+        t = t.double().to(device)
+        t.requires_grad = True
+        psi = Labels[:,0,4].double().to(device)
+        v0 = torch.mul(Labels[:,0,2],torch.cos(psi)) + torch.mul(Labels[:,0,3],torch.sin(psi))
+        output = model(Xs,t,v0)
+        # print(output.shape)
+        R = proj_mat(psi,device,Labels[:,0,0].clone(),Labels[:,0,1].clone())
+        pos_transed = torch.matmul(R.unsqueeze_(1).repeat(1,40,1,1),torch.cat([Labels[:,:,0:2].unsqueeze(2),torch.ones([Labels.shape[0],Labels.shape[1],1,1]).to(device).double()],dim=3).transpose(2,3))
+        pos_transed = pos_transed.squeeze()[:,:,0:2]
+        # print("pos",pos_transed.shape)
+        vel = Labels[:,:,2:4]
+        psi = psi.unsqueeze(-1).repeat([1,40])
+
+        vel_transed = vel.clone()
+        vel_transed[:,:,0] = torch.mul(vel[:,:,0],torch.cos(psi)) + torch.mul(vel[:,:,1],torch.sin(psi))
+        vel_transed[:,:,1] = torch.mul(-vel[:,:,0],torch.sin(psi)) + torch.mul(vel[:,:,1],torch.cos(psi))
+        # print(vel_transed.shape)
+        vx = grad(output[:,:,0].sum(), t, create_graph=True)[0].unsqueeze(-1)
+        vy = grad(output[:,:,1].sum(), t, create_graph=True)[0].unsqueeze(-1)
+        output_vxy = (15.0)*torch.cat([vx, vy], dim=2)
+        
+        output = output.reshape(-1,2).contiguous()
+        output_vxy =output_vxy.reshape(-1,2).contiguous()
+        pos_transed = pos_transed.reshape(-1,2).contiguous()
+        vel_transed = vel_transed.reshape(-1,2).contiguous()
+
+
+        loss_xy = criterion(output,pos_transed)
+        loss_vxy = criterion(output_vxy,vel_transed)
+
+        loss = loss_xy + loss_vxy*0.1/1000
+        loss.type(torch.double)
+        optim.optimizer.zero_grad()
+        loss.backward()
+        i += 1
+        total_loss += loss_xy.item()  #dis
+        n_samples += output.shape[0]/40
+        grad_norm = optim.step()
+        # torch.cuda.empty_cache()
+    # print('projbda: ', vel_transed[0, 0, :])
+    print('p: ', output[0, :], pos_transed[0, :])
+    print('v: ', output_vxy[0, :], vel_transed[0, :])
+    return total_loss / i
+
+        
 
 parser = argparse.ArgumentParser(description='PyTorch traj forecasting')
 parser.add_argument('--epochs', type=int, default=3000,help='upper epoch limit')
@@ -121,7 +185,7 @@ parser.add_argument('--seed', type=int, default=54321,help='random seed')
 parser.add_argument('--frame_n', type=int, default=40,help='every case have n frames')
 parser.add_argument('--frame_gap', type=int, default=10,help='frame gap between two agents')
 parser.add_argument('--normalization', type=bool, default=True, help='whether to do batch normalization')
-parser.add_argument('--RNN', type=bool, default=True, help='RNN model')
+parser.add_argument('--RNN', type=str, default='fourier', help='RNN model')
 
 parser.add_argument('--device',type=str,default='cuda:0',help='')
 parser.add_argument('--buildA_true', type=bool, default=True, help='whether to construct adaptive adjacency matrix')
@@ -142,30 +206,41 @@ if torch.cuda.is_available():
         print("WARNING: You have a CUDA device, so you should probably run with --cuda")
     else:
         torch.cuda.manual_seed(args.seed)
-if not args.RNN:
+if args.RNN == 'icra':
     npy_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/track_0_feature.npy'
     val_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/track_1_feature.npy'
 
     feature_map = TemData(npy_path,args.frame_n,args.device)
     val_map = TemData(val_path,args.frame_n,args.device)
-else:
+elif args.RNN == 'rnn':
     npy_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/DR_CHN_Merging_ZS/40framespersegtracks_001.npy'
     val_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/DR_CHN_Merging_ZS/40framespersegtracks_000.npy'
     feature_map = RNNData(args.frame_n, args.frame_gap,npy_path,args.device)
     val_map = RNNData(args.frame_n, args.frame_gap,val_path,args.device)
+elif args.RNN == 'fourier':
+    npy_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/DR_CHN_Merging_ZS/40framespersegtracks_001.npy'
+    val_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/DR_CHN_Merging_ZS/40framespersegtracks_000.npy'
 
+    feature_map = vectors_car_road('/home/jonathon/Documents/new_project/interaction-dataset-master/maps/DR_CHN_Merging_ZS.osm', npy_path, 10,30)
+    val_map = vectors_car_road('/home/jonathon/Documents/new_project/interaction-dataset-master/maps/DR_CHN_Merging_ZS.osm', val_path, 10,30)
 if args.gpu != None:
     device = torch.device(args.device)
 else:
     device = torch.device('cpu')
 
 
-if not args.RNN:
+if args.RNN == 'icra':
     model = Model(args,device,graph_con=args.gc)
     model.double()
-else:
+elif args.RNN == 'rnn':
     model = dynamic_model(args, device)
     model.double()
+elif args.RNN == 'fourier':
+    model = Model_COS()
+    model.double()
+else:
+    print('no modle named:', args.RNN)
+    exit()
 if args.cuda:
     model.cuda()
 
@@ -196,8 +271,11 @@ try:
             if epoch %800 == 0:
                 new_lr = new_lr / 2
                 adjust_lr(optim.optimizer, new_lr)
-            train_loss = train(dataset_loader,model,criterion,optim,args.batch_size,device)
-            val_loss = evaluate(val_loader,model,criterion,args.batch_size,device)
+            
+            # train_loss = train(dataset_loader,model,criterion,optim,args.batch_size,device)
+            train_loss = train_fourier(dataset_loader,model,criterion,optim,args.batch_size,device)
+            # val_loss = evaluate(val_loader,model,criterion,args.batch_size,device)
+            val_loss = 0
             print('| end of epoch {:3d} | time: {:5.2f}s | train_loss {:5.9f} | val_loss {:5.9f} |'.format(epoch,(time.time()-epoch_start_time),math.sqrt(train_loss*1000000),math.sqrt(val_loss*1000000))) #*1000000
             if val_loss < best_val:
                 p = os.path.join(args.save,args.gc +'best_model.pt')

@@ -38,14 +38,15 @@ class RNNData(Data.Dataset):
         for i in range(1, self.frame_n):
             tmp = torch.unsqueeze(self.data_set[index][i], 0)
             X = torch.cat((X,tmp),0)
-        Lables = []
+        Labels = []
         for i in range(self.frame_gap, self.frame_n):
             assert self.data_set[index,i,0,-1] == 1, 'the first node is not agent!'
-            Lables.append(torch.tensor([self.data_set[index,i,0,1],self.data_set[index,i,0,2]]))
-        Lables = torch.stack(Lables) #batchsize * (frame_n - frame_gap) * 2
-        return (X, Lables)
+            Labels.append(torch.tensor([self.data_set[index,i,0,1],self.data_set[index,i,0,2],self.data_set[index,i,0,3],self.data_set[index,i,0,4]]))
+        Labels = torch.stack(Labels) #batchsize * (frame_n - frame_gap) * 2
+        return (X, Labels)
     def __len__(self):
         return self.data_set.shape[0]
+
 
 if __name__ == "__main__":
     npy_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/DR_CHN_Merging_ZS/40framespersegtracks_001.npy'
@@ -56,6 +57,6 @@ if __name__ == "__main__":
     dataset_loader = Data.DataLoader(dataset=feature_map,
                                                     batch_size=512,
                                                     shuffle=True,num_workers=8)
-    for Xs, Lables in dataset_loader:
-        print(Lables.shape)
+    for Xs, Labels in dataset_loader:
+        print(Labels.shape)
 

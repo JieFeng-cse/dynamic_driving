@@ -143,7 +143,7 @@ class feature_generator(object):
             feature_map_per_frame = []
             while True:
                 line = self.data[min(i + j, len(self.data) - 1)]
-                feature_vec = [int(line[self.track_pos]),float(line[self.x_pos])/1000.0,float(line[self.y_pos])/1000.0,float(line[self.vx_pos]),\
+                feature_vec = [int(line[self.track_pos]),float(line[self.x_pos]),float(line[self.y_pos]),float(line[self.vx_pos]),\
                     float(line[self.vy_pos]),int(line[self.agent_type_pos] != 'car'),float(line[self.wid_pos]),float(line[self.len_pos]),\
                         float(line[self.psi_pos]),int(line[self.agrole_pos]=='agent')]
 
@@ -251,16 +251,16 @@ class feature_generator(object):
 
 
 if __name__ == '__main__':
-    csv_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/recorded_trackfiles/DR_CHN_Merging_ZS/train/segmented/tracks_001.csv'
+    csv_path = '/home/jonathon/Documents/new_project/interaction-dataset-master/recorded_trackfiles/DR_CHN_Merging_ZS/train/segmented/tracks_000.csv'
     ff = feature_generator(csv_path,40,10)
     print(ff.smallest_A_size_check())
     # print(ff.data_iter_num)
     # print(len(ff.agent_list))
     ff.get_k_tracks()
     print("get k tracks")
-    # ff.construct_features()
+    ff.construct_features()
     # pp = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/track_1_feature.npy'
-    pp = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/DR_CHN_Merging_ZS/40framespersegtracks_001.npy'
+    pp = '/home/jonathon/Documents/new_project/interaction-dataset-master/data/DR_CHN_Merging_ZS/40framespersegtracks_000.npy'
     ff.prune(pp,13)
     
 

@@ -25,18 +25,22 @@ def proj_mat(theta, device, X, Y):
     R3 = torch.zeros([X.shape[0],1,3]).to(device).double()
     R3[:,:,2] = 1
     R = torch.cat([R1,R2,R3],dim = 1)
-    # print(R[0])
-    # print(theta[0])
-    # print(torch.sin(theta[0]),torch.cos(theta[0]))
-    # R = torch.tensor([[np.sin(theta),np.cos(theta)],[-np.cos(theta),np.sin(theta)]]).to(device)
     return R
+def proj_mat_inverse(R,device):
+    R_inversed = R.clone().transpose(2,1).to(device)
+    R_inversed[:,2,:] = torch.tensor([0.0,0.0,1.0])
+    tmp = torch.matmul(-R_inversed[:,0:2,0:2],R.clone()[:,0:2,2].unsqueeze(-1))
+    R_inversed[:,0:2,2] = tmp[:,:,0]
+    return R_inversed
+
 class rnn_encoder(nn.Module):
-    def __init__(self, input_dim = 4, hid_dim = 4, n_layers = 2, dropout = 0):
+    def __init__(self, input_dim = 4, hid_dim = 4, n_layers = 2, n_dirs = 2,dropout = 0):
         super(rnn_encoder, self).__init__()
         
         self.hid_dim = hid_dim
         self.n_layers = n_layers
-        self.ln = nn.Linear(4,input_dim)
+        self.n_dirs = n_dirs
+        self.ln = nn.Linear(input_dim,input_dim)
         self.rnn = nn.LSTM(input_dim, hid_dim, n_layers, dropout = dropout,
         bidirectional=True)
         for i in range(len(self.rnn.all_weights)):
@@ -45,9 +49,9 @@ class rnn_encoder(nn.Module):
         # print(x.shape)   
         x = self.ln(x)    
         outputs, (hidden, cell) = self.rnn(x)
-        hidden = torch.sum(hidden.view(2, 2, -1, self.hid_dim),dim=1)
-        cell = torch.sum(cell.view(2, 2, -1, self.hid_dim),dim=1)
-        outputs = torch.sum(outputs.view(10, -1, 2, self.hid_dim),dim=2)
+        hidden = torch.sum(hidden.view(self.n_layers, self.n_dirs, -1, self.hid_dim),dim=1)
+        cell = torch.sum(cell.view(self.n_layers, self.n_dirs, -1, self.hid_dim),dim=1)
+        outputs = torch.sum(outputs.view(10, -1, self.n_dirs, self.hid_dim),dim=2) #10 is seq len
         #outputs = [src len, batch size, hid dim * n directions]
         #hidden = [n layers * n directions, batch size, hid dim]
         #cell = [n layers * n directions, batch size, hid dim]
@@ -131,7 +135,7 @@ class rnn_model(nn.Module):
         assert encoder.n_layers == decoder.n_layers, \
             "Encoder and decoder must have equal number of layers!"
         
-    def forward(self, src, trg, teacher_forcing_ratio = 1):
+    def forward(self, src, trg, teacher_forcing_ratio = 0.5):
         
         #src = [src len, batch size, feature_dim]
         #trg = [trg len, batch size, feature_dim]

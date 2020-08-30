@@ -52,9 +52,9 @@ class vectors_car_road(Data.Dataset):
         data = torch.cat([data, bu], dim=3)
         # print(data_copy.shape)
         data[:,:,:,0] = data_copy[:,:,:,1]
-        data[:,:,:,1] = data_copy[:,:,:,1] + data_copy[:,:,:,3]*0.0001 # 0.001 scale, 0.1s
+        data[:,:,:,1] = data_copy[:,:,:,1] + data_copy[:,:,:,3]*0.1 # 0.001 scale, 0.1s
         data[:,:,:,2] = data_copy[:,:,:,2]
-        data[:,:,:,3] = data_copy[:,:,:,2] + data_copy[:,:,:,4]*0.0001
+        data[:,:,:,3] = data_copy[:,:,:,2] + data_copy[:,:,:,4]*0.1
 
         data[:,:,:,4] = torch.ones_like(data_copy[:,:,:,0]) # for cars and peds. not map
         for i in range(data.shape[1]):

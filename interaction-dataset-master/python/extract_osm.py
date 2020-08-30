@@ -6,6 +6,7 @@ import matplotlib.axes
 import matplotlib.pyplot as plt
 import numpy as np
 from utils import dict_utils
+import os
 class Point:
     def __init__(self):
         self.x = None
@@ -60,7 +61,7 @@ def get_subtype(element):
             return tag.get("v")
     return None
 
-def draw_map_without_lanelet(filename, axes, lat_origin, lon_origin, true_point, pred_point):
+def draw_map_without_lanelet(filename, axes, lat_origin, lon_origin, true_point, pred_point,epoch_id):
 
     assert isinstance(axes, matplotlib.axes.Axes)
 
@@ -120,21 +121,23 @@ def draw_map_without_lanelet(filename, axes, lat_origin, lon_origin, true_point,
 
         x_list, y_list = get_x_y_lists(way, point_dict)
         plt.plot(x_list, y_list, **type_dict)
-    type_dict = dict(color="green", linewidth=1,linestyle="dashed", marker='o')
+    type_dict = dict(color="green", linewidth=1,linestyle="dashed", marker='x', markersize=2)
     plt.plot((true_point[:,0]), true_point[:,1], **type_dict)
 
-    type_dict = dict(color="red", linewidth=1,linestyle="dashed", marker='o')
+    type_dict = dict(color="red", linewidth=1,linestyle="dashed", marker='x',  markersize=2)
     plt.plot(pred_point[:,0], pred_point[:,1], **type_dict)
     print(unknown_linestring_types)
-    plt.show()
+    plot_pth = '/home/jonathon/Documents/new_project/interaction-dataset-master/traj'
+    pth = os.path.join(plot_pth,'epoch'+epoch_id+'traj.png')
+    plt.savefig(pth)
     # plt.ion()
     # plt.pause(10)
     # plt.close()
 
-def main_drawer(map_path, truth_point, pred_point):
+def main_drawer(map_path, truth_point, pred_point, epoch_id):
     fig, axes = plt.subplots(1, 1)
     e = xml.parse(map_path).getroot()
-    draw_map_without_lanelet(map_path, axes, 0,0, truth_point, pred_point)
+    draw_map_without_lanelet(map_path, axes, 0,0, truth_point, pred_point, epoch_id)
 
 def main_vector(map_path):
     r"""
@@ -210,7 +213,7 @@ def find_all_ways(e, point_dict):
         for i in range(len(x_list)-1):
             d_s_x, d_s_y = x_list[i], y_list[i]
             d_e_x, d_e_y = x_list[i+1], y_list[i+1]
-            vi = [d_s_x/1000.0,d_s_y/1000.0 ,d_e_x/1000.0, d_e_y/1000.0, 0.0]+feature_encode # here 0.0 means this vector is a line on the map
+            vi = [d_s_x,d_s_y ,d_e_x, d_e_y, 0.0]+feature_encode # here 0.0 means this vector is a line on the map
             vi.append(j_id)
             p_j.append(vi)
         # P.append(p_j)

@@ -2,6 +2,7 @@ import copy
 import torch
 from torch import nn
 import torch.nn.functional as F
+import math
 
 def clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])
@@ -31,7 +32,8 @@ class Attention(nn.Module):
         """
 
         batchSize, n, C = P.shape
-
+        Qt = self.linear[0](P)
+        Q = Qt[:,0,:].unsqueeze(1)
         # Q = torch.zeros(0, C).to(device)
 
         # Qt = self.linear[0](P)  # [batch size, n, C]
@@ -41,12 +43,12 @@ class Attention(nn.Module):
         #     Q = torch.cat((Q, q), dim=0)
         # Q.unsqueeze_(1)  # Q's shape is # [batch size, 1, C]
 
-        Q ,_= torch.max(self.linear[0](P), dim=1) #!!!
-        Q = Q.unsqueeze(1)
+        # Q ,_= torch.max(self.linear[0](P), dim=1) #!!!
+        # # Q = Q.unsqueeze(1)
         K = self.linear[1](P)  # [batch size, n, C]
         V = self.linear[2](P)
 
-        ans = torch.matmul(Q, K.permute(0, 2, 1))  # [batch size, 1, n]
+        ans = torch.matmul(Q, K.permute(0, 2, 1)) / math.sqrt(C) # [batch size, 1, n]
         ans = F.softmax(ans, dim=2)
         ans = torch.matmul(ans, V)  # [batch size, 1, C]
         ans.squeeze_(1)

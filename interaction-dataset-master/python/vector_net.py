@@ -45,6 +45,8 @@ class VectorNet(nn.Module):
         """
         batch_size, vNum, feature_num = data.shape[0], data.shape[1], data.shape[2]
         pids = data[0,:,-1]
+        with torch.no_grad():
+            data[:,:,-1] = 0.0
         last_pid = pids[0]
         intervals = [0]
         for i in range(vNum):

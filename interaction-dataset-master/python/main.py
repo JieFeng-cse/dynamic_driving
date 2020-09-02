@@ -91,6 +91,7 @@ def evaluate_fourier(dataset_loader,model,criterion,optim, batch_size, device, e
         total_loss_xy += loss_xy.item()  #dis
         total_loss_vxy += loss_vxy.item()
         n_samples += output.shape[0]/40
+        torch.cuda.empty_cache()
         # grad_norm = optim.step()
         # torch.cuda.empty_cache()
     # print('projbda: ', vel_transed[0, 0, :])
@@ -222,10 +223,13 @@ def train_fourier(dataset_loader,model,criterion,optim, batch_size, device, epoc
         output = model(XX,t,v0)  #output: batchsize*seq_len*2
         traj_world = torch.matmul(R_inversed.unsqueeze(1).repeat(1,40,1,1),torch.cat([(output).unsqueeze(2),torch.ones([output.shape[0],output.shape[1],1,1]).to(device).double()],dim=3).transpose(2,3))
         traj_world = traj_world.squeeze()[:,:,0:2]
-        # print(traj_world.shape)
+        begin_xy_pre = traj_world[:,0]
+        final_xy_pre = traj_world[:,-1]
 
         Label_world = torch.matmul(R_inversed.unsqueeze(1).repeat(1,40,1,1),torch.cat([(pos_transed).unsqueeze(2),torch.ones([pos_transed.shape[0],pos_transed.shape[1],1,1]).to(device).double()],dim=3).transpose(2,3))
         Label_world = Label_world.squeeze()[:,:,0:2]
+        final_xy_gt = Label_world[:,-1]
+        begin_xy_gt = Label_world[:,0]
         
         # if i%100 == 0 and i !=0:
 
@@ -247,8 +251,12 @@ def train_fourier(dataset_loader,model,criterion,optim, batch_size, device, epoc
 
         loss_xy = criterion(output,pos_transed)
         loss_vxy = criterion(output_vxy,vel_transed)
+        begin_dis = criterion(begin_xy_pre,begin_xy_gt)
+        final_dis = criterion(final_xy_pre,final_xy_gt)
+        if i%10 == 0:
+            print("ADE: ",loss_xy.item(),' vel loss: ', loss_vxy.item(), ' final_dis: ',final_dis.item())
 
-        loss = loss_xy + loss_vxy*0.5
+        loss = loss_xy + loss_vxy + begin_dis * 10 + final_dis * 10
         loss.type(torch.double)
         optim.optimizer.zero_grad()
         loss.backward()
@@ -257,7 +265,7 @@ def train_fourier(dataset_loader,model,criterion,optim, batch_size, device, epoc
         total_loss_vxy += loss_vxy.item()
         n_samples += output.shape[0]/40
         grad_norm = optim.step()
-        # torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
     # print('projbda: ', vel_transed[0, 0, :])
     # print('p: ', output[0, :], pos_transed[0, :])
     # print('v: ', output_vxy[0, :], vel_transed[0, :])

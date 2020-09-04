@@ -50,21 +50,22 @@ class Model_COS(nn.Module):
         super(Model_COS, self).__init__()
         self.vectornet = VectorNet(14)
         self.mlp = MLP_COS(rate)
-        self.proj = nn.Linear(140,256)
+        self.proj = nn.Linear(112,256)
         self.norm = nn.LayerNorm(256)
         self.rnn = rnn_encoder(hid_dim=2)
     
     def forward(self, x, t, v0):
-        xx = self.vectornet(x[0]) #batch * 112
-        out, hidden, cell = self.rnn(x[1])
-        out = out.permute(1,0,2)
-        out = out.reshape(out.shape[0],-1)
+        # print(x[0]._version)
+        x = self.vectornet(x) #batch * 112
+        # out, hidden, cell = self.rnn(x[1])
+        # out = out.permute(1,0,2)
+        # out = out.reshape(out.shape[0],-1)
         # print(out.shape)
-        x = torch.cat([xx,hidden[0],hidden[1],cell[0],cell[1],out],dim=1)
+        # x = torch.cat([xx,hidden[0],hidden[1],cell[0],cell[1],out],dim=1)
         # print(x.shape)
         x = self.proj(x)
         x = self.norm(x)
-        x = F.tanh(x)
+        x = torch.tanh(x)
         # x = torch.zeros([t.shape[0],1]).to('cuda:0').double()
         #x = x.view(-1, 512)
         trace = []
@@ -72,5 +73,4 @@ class Model_COS(nn.Module):
             pos = self.mlp(x, t[:,i].unsqueeze(-1).clone(), v0.unsqueeze(-1).clone())
             trace.append(pos)
         trace = torch.stack(trace).double().permute(1,0,2)
-        # print(trace.shape)
         return trace

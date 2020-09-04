@@ -130,9 +130,10 @@ def draw_map_without_lanelet(filename, axes, lat_origin, lon_origin, true_point,
     plot_pth = '/home/jonathon/Documents/new_project/interaction-dataset-master/traj'
     pth = os.path.join(plot_pth,'epoch'+epoch_id+'traj.png')
     plt.savefig(pth)
+    plt.close()
     # plt.ion()
     # plt.pause(10)
-    # plt.close()
+    
 
 def main_drawer(map_path, truth_point, pred_point, epoch_id):
     fig, axes = plt.subplots(1, 1)
@@ -222,7 +223,7 @@ def find_all_ways(e, point_dict):
             P.append(each_pj)
     return P
 def norm_nodes_polyline(pj):
-    to_nodes_num = 5
+    to_nodes_num = 1
     pj_group = []
     if len(pj) < to_nodes_num:
         to_add = to_nodes_num - len(pj)

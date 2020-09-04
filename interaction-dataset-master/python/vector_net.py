@@ -12,17 +12,17 @@ class VectorNet(nn.Module):
     """
 
     # def __init__(self, len, pNumber):
-    def __init__(self, len):
+    def __init__(self, feature_length):
         r"""
         Construct a VectorNet.
-        :param len: length of each vector v ([ds,de,a,j]).
+        :param feature_length: length of each vector v ([ds,de,a,j]).
         """
         super(VectorNet, self).__init__()
         layersNumber = 3
-        # self.subGraphs = clones(SubGraph(layersNumber=3, len=len), 3)
-        self.subGraphs = SubGraph(layersNumber=layersNumber, len=len)
-        # self.pLen = len
-        self.pLen = len * (2 ** layersNumber)
+        # self.subGraphs = clones(SubGraph(layersNumber=3, feature_length=feature_length), 3)
+        self.subGraphs = SubGraph(layersNumber=layersNumber, feature_length=feature_length)
+        # self.pLen = feature_length
+        self.pLen = feature_length * (2 ** layersNumber)
         self.globalGraph = Attention(C=self.pLen)
     def forward(self, data):
         r"""
@@ -40,13 +40,15 @@ class VectorNet(nn.Module):
                  [an1,an2,...,ank,an_id]]
               satisfied a(i)_id <= a(i+1)_id
 
-              shape: data.shape = [batch size, vNumber, len]
+              shape: data.shape = [batch size, vNumber, feature_length]
         :return: output
         """
         batch_size, vNum, feature_num = data.shape[0], data.shape[1], data.shape[2]
-        pids = data[0,:,-1]
+        
+        pids = data[0,:,-1].clone() # get all polylines' ids
         with torch.no_grad():
-            data[:,:,-1] = 0.0
+            data[:,:,-1] = torch.zeros_like(data[:,:,-1]) # erase the track id info.
+        
         last_pid = pids[0]
         intervals = [0]
         for i in range(vNum):
@@ -54,11 +56,22 @@ class VectorNet(nn.Module):
                 last_pid = pids[i]
                 intervals.append(i)
         intervals.append(vNum)
+        # print(intervals)
+        # print(len(intervals))
         mini_result_list = []
+        # flag = 0
         for i in range(len(intervals)-1):
+            # if flag:
+            #     mini_batch = data[:, intervals[i]:intervals[i+1], :]
+            #     batch_features = torch.cat([batch_features,self.subGraphs(mini_batch).unsqueeze(1)],dim=1)
+            # else:
+            #     flag = 1
+            #     mini_batch = data[:, intervals[i]:intervals[i+1], :]
+            #     batch_features = self.subGraphs(mini_batch).unsqueeze(1)
             mini_batch = data[:, intervals[i]:intervals[i+1], :]
             mini_result_list.append(self.subGraphs(mini_batch).unsqueeze(1))
         batch_features = torch.cat(mini_result_list,dim=1)
+        # print(batch_features.shape)
 
         # batch_feature_list = []
         # # print(data.shape)
@@ -135,17 +148,21 @@ class VectorNetWithPredicting(nn.Module):
     hope the coordinate of trajectory can be negative).
     """
 
-    def __init__(self, len, timeStampNumber):
+    def __init__(self, feature_length, timeStampNumber):
         r"""
         Construct a VectorNet with predicting.
-        :param len: same as VectorNet.
+        :param feature_length: same as VectorNet.
         :param timeStampNumber: the length of time stamp for predicting the future trajectory.
         """
         super(VectorNetWithPredicting, self).__init__()
-        self.vectorNet = VectorNet(len=len)
+        self.vectorNet = VectorNet(feature_length=feature_length)
         self.timeStamp = timeStampNumber
         self.hidden_size = 64
-        self.trajDecoder =nn.Sequential(nn.Linear(self.vectorNet.pLen, self.hidden_size),
+        self.car_feature = 14
+        self.trajDecoder =nn.Sequential(nn.Linear(self.vectorNet.pLen + self.car_feature, self.hidden_size),
+                                    nn.LayerNorm(self.hidden_size),
+                                    nn.ReLU(True),
+                                    nn.Linear(self.hidden_size, self.hidden_size),
                                     nn.LayerNorm(self.hidden_size),
                                     nn.ReLU(True),
                                     nn.Linear(self.hidden_size, timeStampNumber * 2))
@@ -159,9 +176,36 @@ class VectorNetWithPredicting(nn.Module):
         :param x: the same as VectorNet.
         :return: Future trajectory vector with length timeStampNumber*2, the form is (x1,y1,x2,y2,...).
         """
+        agent_his_traj = x[:,19,:].clone()
+        agent_his_traj[:,-1] = 0.0
+
         x = self.vectorNet(x)
+        x = torch.cat([x, agent_his_traj], dim=1)
         x = self.trajDecoder(x)
         x = x.reshape([x.shape[0], self.timeStamp, 2])
-        for i in range(1, x.shape[1]):
-            x[:,i,:] = x[:, i-1,:] + x[:,i,:]
+        # for i in range(1, x.shape[1]):
+        #     x[:,i,:] = x[:, i-1,:] + x[:,i,:]
+        return x
+
+
+class VectorNetAndTargetPredicting(nn.Module):
+    def __init__(self, feature_length):
+        super(VectorNetAndTargetPredicting, self).__init__()
+        self.vectornet = VectorNet(feature_length=feature_length)
+        self.car_feature = 14
+        self.hidden_size = 150
+        self.targetPred = nn.Sequential(nn.Linear(self.vectornet.pLen + self.car_feature, self.hidden_size),
+                                        nn.LayerNorm(self.hidden_size),
+                                        nn.ReLU(True),
+                                        nn.Linear(self.hidden_size, self.hidden_size),
+                                        nn.LayerNorm(self.hidden_size),
+                                        nn.ReLU(True),
+                                        nn.Linear(self.hidden_size, 2)) # output (x,y)
+    def forward(self, x):
+        agent_his_traj = x[:,19,:].clone()
+        agent_his_traj[:,-1] = 0.0
+        x = self.vectornet(x)
+        x = torch.cat([x, agent_his_traj], dim=1)
+        x = self.targetPred(x)
+
         return x

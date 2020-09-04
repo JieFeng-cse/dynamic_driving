@@ -17,8 +17,8 @@ def proj_mat(theta, device, X, Y):
     X = X.unsqueeze_(-1).unsqueeze_(-1)
     Y = Y.unsqueeze_(-1).unsqueeze_(-1)
     R11 = torch.cos(theta).unsqueeze_(-1).unsqueeze_(-1)
-    R12 = -torch.sin(theta).unsqueeze_(-1).unsqueeze_(-1)
-    R21 = torch.sin(theta).unsqueeze_(-1).unsqueeze_(-1)
+    R12 = torch.sin(theta).unsqueeze_(-1).unsqueeze_(-1)
+    R21 = -torch.sin(theta).unsqueeze_(-1).unsqueeze_(-1)
     R22 = torch.cos(theta).unsqueeze_(-1).unsqueeze_(-1)
 
     R1 = torch.cat([R11, R12, -R11*X-R12*Y], dim=2)

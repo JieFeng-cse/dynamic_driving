@@ -66,11 +66,11 @@ class SubGraphLayer(nn.Module):
         self.mlp_input_size = feature_length
         self.mlp_output_size = feature_length
         self.hidden_size = 64
-        self.node_encoder = nn.Sequential(nn.Linear(self.mlp_input_size, self.hidden_size),
-                                    nn.LayerNorm(self.hidden_size),
+        self.node_encoder = nn.Sequential(nn.Linear(self.mlp_input_size, self.mlp_output_size),
+                                    nn.LayerNorm(self.mlp_output_size),
                                     nn.ReLU(True),
-                                    nn.Linear(self.hidden_size, self.mlp_output_size),
-                                    nn.ReLU(True)
+                                    # nn.Linear(self.hidden_size, self.mlp_output_size),
+                                    # nn.ReLU(True)
                                     )
 
     def forward(self, x):

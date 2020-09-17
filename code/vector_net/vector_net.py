@@ -12,7 +12,7 @@ class VectorNet(nn.Module):
     """
 
     # def __init__(self, len, pNumber):
-    def __init__(self, feature_length):
+    def __init__(self, feature_length, device='cuda:0'):
         r"""
         Construct a VectorNet.
         :param feature_length: length of each vector v ([ds,de,a,j]).
@@ -24,7 +24,8 @@ class VectorNet(nn.Module):
         # self.pLen = feature_length
         self.pLen = feature_length * (2 ** layersNumber)
         self.globalGraph = Attention(C=self.pLen)
-    def forward(self, data):
+        self.device = device
+    def forward(self, data, osm, osm_interval):
         r"""
 
         :param data: the input data of network. Each coordinate of key position is centered by
@@ -43,63 +44,67 @@ class VectorNet(nn.Module):
               shape: data.shape = [batch size, vNumber, feature_length]
         :return: output
         """
-        batch_size, vNum, feature_num = data.shape[0], data.shape[1], data.shape[2]
-        
-        pids = data[0,:,-1].clone() # get all polylines' ids
-        with torch.no_grad():
-            data[:,:,-1] = torch.zeros_like(data[:,:,-1]) # erase the track id info.
-        
-        last_pid = pids[0]
-        intervals = [0]
-        for i in range(vNum):
-            if last_pid != pids[i]:
-                last_pid = pids[i]
-                intervals.append(i)
-        intervals.append(vNum)
-        # print(intervals)
-        # print(len(intervals))
-        mini_result_list = []
-        # flag = 0
-        for i in range(len(intervals)-1):
-            # if flag:
-            #     mini_batch = data[:, intervals[i]:intervals[i+1], :]
-            #     batch_features = torch.cat([batch_features,self.subGraphs(mini_batch).unsqueeze(1)],dim=1)
+        nCar = 10
+        # osm map
+        osm_subGraph_list = []
+        for i in range(len(osm_interval)-1):
+            osm_subGraph_list.append(self.subGraphs(osm[:, osm_interval[i]:osm_interval[i+1], :]).unsqueeze(1))
+        osm_nodes = torch.cat(osm_subGraph_list, dim=1) #[batch, road_poly_num, features]
+        # print(osm_nodes.shape)
+        # Suppose we have 10 cars in each frame, then n = 10.
+        all_batch_nodes = [] #[batch, nCar, node_feature]
+        global_graphs = [] #[batch, features]
+        for i in range(len(data)): # num of batch
+            data1 = data[i]
+            each_batch_nodes = [] # in different batch: different len
+            for j in range(len(data1)): # num of trajs(cars that appear), traj0 = agent
+                sub_node = self.subGraphs(data1[j].to(self.device).double().unsqueeze(0))
+                each_batch_nodes.append(sub_node)
+                # break
+            # if len(each_batch_nodes) > nCar:
+            #     each_batch_nodes = each_batch_nodes[:nCar]
             # else:
-            #     flag = 1
-            #     mini_batch = data[:, intervals[i]:intervals[i+1], :]
-            #     batch_features = self.subGraphs(mini_batch).unsqueeze(1)
-            mini_batch = data[:, intervals[i]:intervals[i+1], :]
-            mini_result_list.append(self.subGraphs(mini_batch).unsqueeze(1))
-        batch_features = torch.cat(mini_result_list,dim=1)
-        # print(batch_features.shape)
+            #     to_add = nCar - len(each_batch_nodes)
+            #     for _ in range(to_add): # add zero tensors to list if < nCar =10
+            #         each_batch_nodes.append(torch.zeros_like(each_batch_nodes[0]).to(self.device).double())
+            # all_batch_nodes.append(torch.cat(each_batch_nodes, dim=0)) # [nCar, node_feature]
+            each_batch_nodes = torch.cat(each_batch_nodes, dim=0) #[numCar, node_features]
+            each_batch_nodes_with_osm = torch.cat([each_batch_nodes, osm_nodes[i,:,:]], dim=0) #[numCar+numRoad, features]
+            global_graphs.append(self.globalGraph(each_batch_nodes_with_osm.unsqueeze(0)))
+        global_graphs = torch.cat(global_graphs,dim=0)
+    
+        # all_batch_nodes = torch.stack(all_batch_nodes)
+        # all_batch_nodes_with_osm = torch.cat([all_batch_nodes, osm_nodes], dim=1) #[batch, nCar+nPolyRoad, features]
+        
+            
+        
+        # batch_size, vNum, feature_num = data.shape[0], data.shape[1], data.shape[2]
+        
+        
+        # pids = data[0,:,-1].clone() # get all polylines' ids
+        # with torch.no_grad():
+        #     data[:,:,-1] = torch.zeros_like(data[:,:,-1]) # erase the track id info.
+        
+        # last_pid = pids[0]
+        # intervals = [0]
+        # for i in range(vNum):
+        #     if last_pid != pids[i]:
+        #         last_pid = pids[i]
+        #         intervals.append(i)
+        # intervals.append(vNum)
+      
+        # mini_result_list = []
 
-        # batch_feature_list = []
-        # # print(data.shape)
-        # st_time = time.time()
-        # for batch_id in range(batch_size):
-        #     one_data = data[batch_id]
-        #     last_trk_id = one_data[0][-1]
-        #     last_frame = one_data[0].unsqueeze(0).unsqueeze(0)
-        #     # print(last_frame.shape)
-        #     sub_graph_result_list = []
-        #     for vec_num in range(one_data.shape[0]):
-        #         if last_trk_id != one_data[vec_num,-1]:
-        #             # print(last_frame.shape)
-        #             sub_graph_result_list.append(self.subGraphs(last_frame))
-        #             last_trk_id = one_data[vec_num,-1]
-        #             last_frame = one_data[vec_num].unsqueeze(0).unsqueeze(0)
-        #         else:
-        #             last_frame = torch.cat([one_data[vec_num].unsqueeze(0).unsqueeze(0), last_frame], dim=1)
-        #     sub_graph_result_list.append(self.subGraphs(last_frame)) # to [poly_num, encoded features]
+        # for i in range(len(intervals)-1):
+        #     mini_batch = data[:, intervals[i]:intervals[i+1], :]
+        #     mini_result_list.append(self.subGraphs(mini_batch).unsqueeze(1))
+        # batch_features = torch.cat(mini_result_list,dim=1)
 
-        #     encoded_features = torch.cat(sub_graph_result_list, dim=0).unsqueeze(0)
-        #     batch_feature_list.append(encoded_features)
-        # print('main vecnet time cost:', time.time()-st_time)
-        # batch_features = torch.cat(batch_feature_list, dim=0) #[batchsize, poly_num, encoded features]
-        # print(batch_features.shape)
-        result_features = self.globalGraph(batch_features)
+        # result_features = self.globalGraph(batch_features)
 
-        return result_features
+        # result_features = self.globalGraph(all_batch_nodes_with_osm)
+
+        return global_graphs
 
 
 
@@ -148,17 +153,18 @@ class VectorNetWithPredicting(nn.Module):
     hope the coordinate of trajectory can be negative).
     """
 
-    def __init__(self, feature_length, timeStampNumber):
+    def __init__(self, feature_length, timeStampNumber, device='cuda:0'):
         r"""
         Construct a VectorNet with predicting.
         :param feature_length: same as VectorNet.
         :param timeStampNumber: the length of time stamp for predicting the future trajectory.
         """
         super(VectorNetWithPredicting, self).__init__()
+        self.device = device
         self.vectorNet = VectorNet(feature_length=feature_length)
         self.timeStamp = timeStampNumber
         self.hidden_size = 64
-        self.car_feature = 14
+        self.car_feature = self.vectorNet.pLen #14
         self.trajDecoder =nn.Sequential(nn.Linear(self.vectorNet.pLen + self.car_feature, self.hidden_size),
                                     nn.LayerNorm(self.hidden_size),
                                     nn.ReLU(True),
@@ -166,23 +172,31 @@ class VectorNetWithPredicting(nn.Module):
                                     nn.LayerNorm(self.hidden_size),
                                     nn.ReLU(True),
                                     nn.Linear(self.hidden_size, timeStampNumber * 2))
-        
+        self.subGraph_agent = SubGraph(layersNumber=3, feature_length=feature_length)
          #MLP.MLP(inputSize=self.vectorNet.pLen,outputSize=timeStampNumber * 2,noReLU=False)
 
 
-    def forward(self, x):
+    def forward(self, x, osm, osm_interval):
         r"""
 
         :param x: the same as VectorNet.
         :return: Future trajectory vector with length timeStampNumber*2, the form is (x1,y1,x2,y2,...).
         """
-        agent_his_traj = x[:,19,:].clone()
-        agent_his_traj[:,-1] = 0.0
+        # agent_his_traj = x[:,9,:].clone() # the number indicates last known frame
+        # agent_his_traj[:,-1] = 0.0
+        agent_his_batches = []
+        for i in range(len(x)):
+            agent_his_batches.append(x[i][0][:])
+        agent_his_traj = torch.stack(agent_his_batches).to(self.device).double()
+        agent_his_traj = self.subGraph_agent(agent_his_traj)
+        # print(agent_his_traj.shape)
+        # agent_his_traj = 
 
-        x = self.vectorNet(x)
+        x = self.vectorNet(x, osm, osm_interval)
         x = torch.cat([x, agent_his_traj], dim=1)
         x = self.trajDecoder(x)
         x = x.reshape([x.shape[0], self.timeStamp, 2])
+        
         # for i in range(1, x.shape[1]):
         #     x[:,i,:] = x[:, i-1,:] + x[:,i,:]
         return x

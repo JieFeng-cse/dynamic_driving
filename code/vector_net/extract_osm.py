@@ -120,17 +120,21 @@ def draw_map_without_lanelet(filename, axes, lat_origin, lon_origin, true_point,
 
         x_list, y_list = get_x_y_lists(way, point_dict)
         plt.plot(x_list, y_list, **type_dict)
-    type_dict = dict(color="green", linewidth=1,linestyle="dashed", marker='o', markersize=0.5)
-    plt.plot((true_point[:,0]), true_point[:,1], **type_dict)
+    # type_dict = dict(color="green", linewidth=1,linestyle="dashed", marker='o', markersize=0.5)
+    type_dict = dict(color="green", marker='x', s=0.2)
+    plt.scatter(true_point[:,0], true_point[:,1], **type_dict)
 
-    type_dict = dict(color="red", linewidth=1,linestyle="dashed", marker='o', markersize=0.5)
-    plt.plot(pred_point[:,0], pred_point[:,1], **type_dict)
-    print(unknown_linestring_types)
+    # type_dict = dict(color="red", linewidth=1,linestyle="dashed", marker='o', markersize=0.5)
+    type_dict = dict(color="red", marker='x', s=0.2)
+    plt.scatter(pred_point[:,0], pred_point[:,1], **type_dict)
+
+    # print(unknown_linestring_types)
     # plt.show()
+    plt.rcParams['savefig.dpi'] = 500
     plt.savefig(fig_name)
     # plt.ion()
     # plt.pause(10)
-    # plt.close()
+    plt.close()
 
 def main_drawer(map_path, truth_point, pred_point, fig_name):
     fig, axes = plt.subplots(1, 1)
@@ -247,6 +251,9 @@ def norm_nodes_polyline(pj):
     return pj_group
 if __name__ == "__main__":
     # projector = LL2XYProjector(0,0) # because coord in osm has already been pre-processed
-    # main_drawer('/home/zyh/graph_jie/maps/DR_USA_Intersection_EP0.osm') # draw the map with matplot
-    main_vector('./maps/DR_USA_Intersection_EP0.osm')
+    pa = np.array([[0,0]])
+    pb = np.array([[0,0]])
+    fig_name = './results/test01'
+    main_drawer('/home/zyh/graph_jie/maps/DR_USA_Intersection_EP1.osm', pa, pb, fig_name) # draw the map with matplot
+    # main_vector('./maps/DR_USA_Intersection_EP0.osm')
     

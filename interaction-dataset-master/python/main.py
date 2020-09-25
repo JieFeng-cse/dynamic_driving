@@ -31,12 +31,12 @@ def evaluate_fourier(dataset_loader, model, criterion, criterion2, optim, batch_
     n_samples = 0
     i = 0
     sequence_tracer = True
+    state = 'eva'
     for Xs, Labels, R_inversed in dataset_loader:
         Xs = Xs.double().to(device)
         Labels = Labels.double().to(device)
         R_inversed = R_inversed.double().to(device)
-        t = torch.arange(start=0, end=30, step=1).unsqueeze(
-            0).repeat(Labels.shape[0], 1)
+        t = torch.arange(start=0, end=30, step=1).unsqueeze(0).repeat(Labels.shape[0], 1)
         t = t.double().to(device)
         t.requires_grad = True
         psi = Labels[:, 0, 4].double().to(device)
@@ -44,27 +44,30 @@ def evaluate_fourier(dataset_loader, model, criterion, criterion2, optim, batch_
             torch.mul(Labels[:, 0, 3], torch.sin(psi))
         # output = model(Xs,t,v0)
 
-        # R = proj_mat(psi, device, Labels[:, 0,
-        #                                  0].clone(), Labels[:, 0, 1].clone())
+        # R = proj_mat(psi, device, Labels[:, 0, 0].clone(), Labels[:, 0, 1].clone())
         # R_inversed = proj_mat_inverse(R, device)
         # pos_transed = torch.matmul(R.unsqueeze(1).repeat(1, 40, 1, 1), torch.cat([Labels[:, :, 0:2].unsqueeze(
         #     2), torch.ones([Labels.shape[0], Labels.shape[1], 1, 1]).to(device).double()], dim=3).transpose(2, 3))
-        # pos_transed = pos_transed.squeeze()[:, :, 0:2]
+        pos_transed = Labels[:, :, 0:2]
 
         vel = Labels[:, :, 2:4]
-        psi = psi.unsqueeze(-1).repeat([1, 30])
+        psi = psi.unsqueeze(-1).repeat([1, Labels.shape[1]])
 
         vel_transed = vel.clone()
-        vel_transed[:, :, 0] = torch.mul(vel[:, :, 0], torch.cos(
-            psi)) + torch.mul(vel[:, :, 1], torch.sin(psi))
+        vel_transed[:, :, 0] = torch.mul(vel[:, :, 0], torch.cos(psi)) + \
+            torch.mul(vel[:, :, 1], torch.sin(psi))
         vel_transed[:, :, 1] = torch.mul(-vel[:, :, 0], torch.sin(psi)) + \
             torch.mul(vel[:, :, 1], torch.cos(psi))
 
         # just for experiment
-        # X = torch.cat([pos_transed[:, 0:10], vel_transed[:, 0:10]],
-        #               dim=2).permute(1, 0, 2).contiguous()
-        # XX = [Xs, X]
-        output = model(Xs, t, v0)  # output: batchsize*seq_len*2
+        X = torch.cat([pos_transed, vel_transed],
+                      dim=2).permute(1, 0, 2).contiguous()
+        XX = [Xs, X]
+
+        vel_transed = vel_transed[:,10:]
+        Labels = Labels[:,10:]
+
+        output = model(XX, t, v0, state)  # output: batchsize*seq_len*2
         traj_world = torch.matmul(R_inversed.unsqueeze(1).repeat(1, 30, 1, 1), torch.cat([(output).unsqueeze(
             2), torch.ones([output.shape[0], output.shape[1], 1, 1]).to(device).double()], dim=3).transpose(2, 3))
         traj_world = traj_world.squeeze()[:, :, 0:2]
@@ -77,25 +80,26 @@ def evaluate_fourier(dataset_loader, model, criterion, criterion2, optim, batch_
         final_xy_gt = Label_world[:, -1]
         begin_xy_gt = Label_world[:, 0]
         if i % 100 == 0:
+            # print(Labels[0])
             print("start prediction: ", output[0][0], " pos: ", Labels[0][0][0:2])
             print("end prediction: ", output[0][-1], " pos: ", Labels[0][-1][0:2])
             
             main_drawer('/home/jonathon/Documents/new_project/interaction-dataset-master/maps/DR_CHN_Merging_ZS.osm',
                         Label_world[0].cpu().detach().numpy(), traj_world[0].cpu().detach().numpy(), epoch_id)
-        vx = grad(output[:, :, 0].sum(), t, create_graph=True)[0].unsqueeze(-1)
-        vy = grad(output[:, :, 1].sum(), t, create_graph=True)[0].unsqueeze(-1)
-        output_vxy = (15.0)*torch.cat([vx, vy], dim=2)
+        # vx = grad(output[:, :, 0].sum(), t, create_graph=True)[0].unsqueeze(-1)
+        # vy = grad(output[:, :, 1].sum(), t, create_graph=True)[0].unsqueeze(-1)
+        # output_vxy = (15.0)*torch.cat([vx, vy], dim=2)
 
         output = output.reshape(-1, 2).contiguous()
-        output_vxy = output_vxy.reshape(-1, 2).contiguous()
-        # pos_transed = pos_transed.reshape(-1, 2).contiguous()
-        # print(output.shape)
-        # print(Labels.shape)
+        # output_vxy = output_vxy.reshape(-1, 2).contiguous()
+        # # pos_transed = pos_transed.reshape(-1, 2).contiguous()
+        # # print(output.shape)
+        # # print(Labels.shape)
         Labels = Labels[:,:,0:2].reshape(-1, 2).contiguous()
-        vel_transed = vel_transed.reshape(-1, 2).contiguous()
+        # vel_transed = vel_transed.reshape(-1, 2).contiguous()
 
-        loss_xy = criterion(output, Labels)
-        loss_vxy = criterion(output_vxy, vel_transed)
+        loss_xy = torch.norm((output - Labels),2, dim=1).mean()
+        # loss_vxy = criterion(output_vxy, vel_transed)
         # begin_dis = criterion(begin_xy_pre, begin_xy_gt)
         # final_dis = criterion(final_xy_pre, final_xy_gt)
 
@@ -110,11 +114,11 @@ def evaluate_fourier(dataset_loader, model, criterion, criterion2, optim, batch_
         # loss.backward()
         i += 1
         total_loss_xy += loss_xy.item()  # dis
-        total_loss_vxy += loss_vxy.item()
+        # total_loss_vxy += loss_vxy.item()
         n_samples += output.shape[0]/40
         # grad_norm = optim.step()
         torch.cuda.empty_cache()
-    return total_loss_xy / i, total_loss_vxy/i
+    return total_loss_xy / i, 0#total_loss_vxy/i
 
 # def evaluate_fourier(dataset_loader, model, criterion, criterion2, optim, batch_size, device, epoch_id):
 #     model.eval()
@@ -304,9 +308,11 @@ def train_fourier(dataset_loader, model, criterion, criterion2, optim, batch_siz
     n_samples = 0
     i = 0
     sequence_tracer = True
+    state = 'train'
     for Xs, Labels, R_inversed in dataset_loader:
         Xs = Xs.double().to(device)
         Labels = Labels.double().to(device)
+        
         R_inversed = R_inversed.double().to(device)
         t = torch.arange(start=0, end=30, step=1).unsqueeze(
             0).repeat(Labels.shape[0], 1)
@@ -317,15 +323,15 @@ def train_fourier(dataset_loader, model, criterion, criterion2, optim, batch_siz
             torch.mul(Labels[:, 0, 3], torch.sin(psi))
         # output = model(Xs,t,v0)
 
-        # R = proj_mat(psi, device, Labels[:, 0,
-        #                                  0].clone(), Labels[:, 0, 1].clone())
+        # R = proj_mat(psi, device, Labels[:, 9,
+        #                                  0].clone(), Labels[:, 9, 1].clone())
         # R_inversed = proj_mat_inverse(R, device)
         # pos_transed = torch.matmul(R.unsqueeze(1).repeat(1, 40, 1, 1), torch.cat([Labels[:, :, 0:2].unsqueeze(
         #     2), torch.ones([Labels.shape[0], Labels.shape[1], 1, 1]).to(device).double()], dim=3).transpose(2, 3))
-        # pos_transed = pos_transed.squeeze()[:, :, 0:2]
+        pos_transed = Labels[:, :, 0:2]
 
         vel = Labels[:, :, 2:4]
-        psi = psi.unsqueeze(-1).repeat([1, 30])
+        psi = psi.unsqueeze(-1).repeat([1, Labels.shape[1]])
 
         vel_transed = vel.clone()
         vel_transed[:, :, 0] = torch.mul(vel[:, :, 0], torch.cos(
@@ -334,10 +340,14 @@ def train_fourier(dataset_loader, model, criterion, criterion2, optim, batch_siz
             torch.mul(vel[:, :, 1], torch.cos(psi))
 
         # just for experiment
-        # X = torch.cat([pos_transed[:, 0:10], vel_transed[:, 0:10]],
-        #               dim=2).permute(1, 0, 2).contiguous()
-        # XX = [Xs, X]
-        output = model(Xs, t, v0)  # output: batchsize*seq_len*2
+        X = torch.cat([pos_transed, vel_transed.clone()],
+                      dim=2).permute(1, 0, 2).contiguous()
+        XX = [Xs, X]
+
+        vel_transed = vel_transed[:,10:]
+        Labels = Labels[:,10:]
+
+        output = model(XX, t, v0, state)  # output: batchsize*seq_len*2
         traj_world = torch.matmul(R_inversed.unsqueeze(1).repeat(1, 30, 1, 1), torch.cat([(output).unsqueeze(
             2), torch.ones([output.shape[0], output.shape[1], 1, 1]).to(device).double()], dim=3).transpose(2, 3))
         traj_world = traj_world.squeeze()[:, :, 0:2]
@@ -358,46 +368,52 @@ def train_fourier(dataset_loader, model, criterion, criterion2, optim, batch_siz
         # print(X.shape)
         # just for experiment
         # print(vel_transed.shape)
-        vx = grad(output[:, :, 0].sum(), t, create_graph=True)[0].unsqueeze(-1)
-        vy = grad(output[:, :, 1].sum(), t, create_graph=True)[0].unsqueeze(-1)
-        output_vxy = (15.0)*torch.cat([vx, vy], dim=2)
+        # vx = grad(output[:, :, 0].sum(), t, create_graph=True)[0].unsqueeze(-1)
+        # vy = grad(output[:, :, 1].sum(), t, create_graph=True)[0].unsqueeze(-1)
+        # output_vxy = torch.cat([vx, vy], dim=2)
+        # #batchsize×seq_len * 2
+        # # print(output_vxy.shape)
+        # vx_std = torch.std(output_vxy[:,:,0])
+        # vy_std = torch.std(output_vxy[:,:,1])
+
 
         output = output.reshape(-1, 2).contiguous()
-        output_vxy = output_vxy.reshape(-1, 2).contiguous()
+        # output_vxy = output_vxy.reshape(-1, 2).contiguous()
         # pos_transed = pos_transed.reshape(-1, 2).contiguous()
         # print(output.shape)
         # print(Labels.shape)
         Labels = Labels[:,:,0:2].reshape(-1, 2).contiguous()
         vel_transed = vel_transed.reshape(-1, 2).contiguous()
 
-        loss_xy = criterion(output, Labels)
-        loss_vxy = criterion(output_vxy, vel_transed)
-        begin_dis = criterion(begin_xy_pre, begin_xy_gt)
-        final_dis = criterion(final_xy_pre, final_xy_gt)
+        loss_xy = torch.norm((output - Labels),2, dim=1).mean()
+        # loss_vxy = criterion(output_vxy, vel_transed)
+        begin_dis = torch.norm((begin_xy_pre - begin_xy_gt),2, dim=1).mean()
+        final_dis = torch.norm((final_xy_pre - final_xy_gt),2, dim=1).mean()
 
         loss_xy2 = criterion2(output, Labels)
-        loss_vxy2 = criterion2(output_vxy, vel_transed)
+        # loss_vxy2 = criterion2(output_vxy, vel_transed)
         begin_dis2 = criterion2(begin_xy_pre, begin_xy_gt)
         final_dis2 = criterion2(final_xy_pre, final_xy_gt)
 
         if i % 50 == 0:
-            print("ADE: ", loss_xy.item(), ' vel loss: ',
-                  loss_vxy.item(), ' final_dis: ', final_dis.item())
+            # print("ADE: ", loss_xy.item(), ' vel loss: ',
+            #       loss_vxy.item(), ' final_dis: ', final_dis.item())
+            print("ADE: ", loss_xy.item(), ' final_dis: ', final_dis.item())
 
-        loss = loss_xy2 + loss_vxy2 *0.2 #+ begin_dis2 + final_dis2 
+        loss = loss_xy2 + loss_xy * 0.2# + loss_vxy2 *0.2 + begin_dis2*10 + final_dis2 *10 #+ vx_std + vy_std
         loss.type(torch.double)
         optim.optimizer.zero_grad()
         loss.backward()
         i += 1
         total_loss_xy += loss_xy.item()  # dis
-        total_loss_vxy += loss_vxy.item()
+        # total_loss_vxy += loss_vxy.item()
         n_samples += output.shape[0]/40
         grad_norm = optim.step()
         torch.cuda.empty_cache()
     # print('projbda: ', vel_transed[0, 0, :])
     # print('p: ', output[0, :], pos_transed[0, :])
     # print('v: ', output_vxy[0, :], vel_transed[0, :])
-    return total_loss_xy / i, total_loss_vxy/i
+    return total_loss_xy / i, 0#total_loss_vxy/i
 
 
 parser = argparse.ArgumentParser(description='PyTorch traj forecasting')
@@ -494,7 +510,7 @@ elif args.model == 'rnn_update':
     model = new_model(args, args.device)
     model.double()
 elif args.model == 'fourier':
-    model = Model_COS()
+    model = Model_COS(args,args.device)
     model.double()
 else:
     print('no modle named:', args.model)
@@ -545,9 +561,9 @@ try:
                 xy_loss_val, v_loss_val = evaluate_fourier(
                     val_loader, model, criterion, criterion2, optim, args.val_batch_size, device, str(epoch)+args.model)
                 print('Train: | end of epoch {:3d} | time: {:5.2f}s | xy_loss {:5.9f} | vel_loss {:5.9f} |'.format(
-                    epoch, (time.time()-epoch_start_time), math.sqrt(xy_loss), math.sqrt(v_loss)))
+                    epoch, (time.time()-epoch_start_time), xy_loss, v_loss))
                 print('Val: | end of epoch {:3d} | time: {:5.2f}s | xy_loss_val {:5.9f} | vel_loss_val {:5.9f} |'.format(
-                    epoch, (time.time()-epoch_start_time), math.sqrt(xy_loss_val), math.sqrt(v_loss_val)))
+                    epoch, (time.time()-epoch_start_time), xy_loss_val, v_loss_val))
             # val_loss = evaluate(val_loader,model,criterion,args.batch_size,device)
             # *1000000
             if val_loss < best_val:

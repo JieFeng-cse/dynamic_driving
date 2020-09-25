@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from utils import dict_utils
 import os
+import pickle
 class Point:
     def __init__(self):
         self.x = None
@@ -250,8 +251,28 @@ def norm_nodes_polyline(pj):
     return pj_group
 if __name__ == "__main__":
     # projector = LL2XYProjector(0,0) # because coord in osm has already been pre-processed
+    pth = '/home/jonathon/Documents/new_project/interaction-dataset-master/vec_dir/DR_USA_Intersection_EP0/40framesperseg_000.pickle'
+    map_pth = '/home/jonathon/Documents/new_project/interaction-dataset-master/maps/DR_USA_Intersection_EP0.osm'
+    with open(pth, "rb") as fp:
+        dic = pickle.load(fp)
+    print(len(dic))
+    for Bs in dic:
+        iR =dic[Bs][1]
+        # print(iR)
+        tmp = dic[Bs][0]
+        for i, track_id in enumerate(tmp):
+            print(track_id)
+            track = np.array(tmp[track_id])
+            track_tmp = track[:,1:5].copy()
+            track[:,1] = iR[0,0,0]*track_tmp[:,0] + iR[0,0,1]*track_tmp[:,1] + iR[0,0,2]
+            track[:,2] = iR[0,1,0]*track_tmp[:,0] + iR[0,1,1]*track_tmp[:,1] + iR[0,1,2]
+            pa = np.concatenate((np.expand_dims(track[:,1],(1)),np.expand_dims(track[:,2],(1))),axis=1)
+            print(pa.shape)
+            main_drawer(map_pth,pa,pa,str(Bs)+str(track_id))
+            # track[:,3] = R[0,0,0]*track_tmp[:,2] + R[0,0,1]*track_tmp[:,3]
+            # track[:,4] = R[0,1,0]*track_tmp[:,2] + R[0,1,1]*track_tmp[:,3]
     pa = np.array([[0,0]])
     pb = np.array([[0,0]])
-    main_drawer('/home/jonathon/Documents/new_project/interaction-dataset-master/maps/DR_CHN_Merging_ZS.osm',pa,pb) # draw the map with matplot
+    # main_drawer('/home/jonathon/Documents/new_project/interaction-dataset-master/maps/DR_CHN_Merging_ZS.osm',pa,pb) # draw the map with matplot
     # main_vector('./maps/DR_USA_Intersection_EP0.osm')
     

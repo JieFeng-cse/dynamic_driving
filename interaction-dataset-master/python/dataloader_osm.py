@@ -34,7 +34,7 @@ class vectors_car_road(Data.Dataset):
         X = self.all_data_set[index]
         label_list = []
         last_agent_loc_list = []
-        for j in range(self.train_frame, self.train_frame+self.predict_frame):    
+        for j in range(0, self.train_frame+self.predict_frame):    
             for i in range(self.data_set[index][j].shape[0]):
                 if self.data_set[index][j][i][-1] == 1 :
                     Lable = torch.stack([self.data_set[index][j][i][1],self.data_set[index][j][i][2],self.data_set[index][j][i][3],self.data_set[index][j][i][4],self.data_set[index][j][i][8]]).unsqueeze(0)
@@ -47,7 +47,6 @@ class vectors_car_road(Data.Dataset):
         #             last_agent_loc_list.append(last_agent_loc)
                     # break
         Lable = torch.cat(label_list, dim=0)
-        # last_agent_locs = torch.cat(last_agent_loc_list, dim=0)
         iR = self.iR[index]
         return (X, Lable, iR)
     def __len__(self):
@@ -55,11 +54,13 @@ class vectors_car_road(Data.Dataset):
     def RotateAndGetR_agents(self, data, train_frame):
         all_xy = data[:,:,:,1:3].clone()
         all_xy = torch.cat([all_xy, torch.ones_like(data[:,:,:,:1])], dim=-1)
+        all_vxy = data[:,:,:,3:5].clone() # speed
+        all_vxy = torch.cat([all_vxy, torch.ones_like(data[:,:,:,:1])], dim=-1)
         # print(all_xy.shape)
         all_agent_x = data[:,train_frame-1, 0, 1].clone()
         all_agent_y = data[:,train_frame-1, 0, 2].clone()
         all_agent_psi = data[:,train_frame-1, 0, -2].clone()
-        R, iR = self.matrixR(all_agent_psi, all_agent_x, all_agent_y)
+        R, iR, R_rot_only = self.matrixR(all_agent_psi, all_agent_x, all_agent_y)
         Rout = R.clone()
         R = R.unsqueeze(1).unsqueeze(1)
         assert R.shape[-2] == 3 and R.shape[-1] == 3, 'error, R is not a transform matrix.'
@@ -67,7 +68,15 @@ class vectors_car_road(Data.Dataset):
         # print(R.shape, all_xy.shape)
         all_xy = torch.matmul(R, all_xy.unsqueeze(-1)).squeeze(-1)
         all_xy = all_xy[:,:,:,:2]
+
+        R_rot_only = R_rot_only.unsqueeze(1).unsqueeze(1)
+        assert R_rot_only.shape[-2] == 3 and R_rot_only.shape[-1] == 3, 'error, R_rot_only is not a transform matrix.'
+        R_rot_only = R_rot_only.repeat(1, all_vxy.shape[1], all_vxy.shape[2], 1, 1)
+        # print(R_rot_only.shape, all_vxy.shape)
+        all_vxy = torch.matmul(R_rot_only, all_vxy.unsqueeze(-1)).squeeze(-1)
+        all_vxy = all_vxy[:,:,:,:2]
         data[:,:,:,1:3] = all_xy
+        data[:,:,:,3:5] = all_vxy
         # print(all_xy.shape)
         return data, Rout, iR
     def Rotate_osm(self, data, R):
@@ -97,14 +106,16 @@ class vectors_car_road(Data.Dataset):
         RC1 = torch.stack([cos, -sin, torch.zeros_like(theta)], dim=1) # theta: [all num, ] -> [all num , 3]
         RC2 = torch.stack([sin, cos, torch.zeros_like(theta)], dim=1)
         RC3 = torch.stack([-x*cos-y*sin, x*sin-y*cos, torch.ones_like(theta)], dim=1)
+        RC3_no_trans = torch.stack([torch.zeros_like(theta), torch.zeros_like(theta), torch.ones_like(theta)], dim=1)
         R = torch.stack([RC1, RC2, RC3], dim = 2) # theta: [all num , 3] -> [all num, 3, 3]
         # print(R.shape)
         iRC1 = torch.stack([cos, sin, torch.zeros_like(theta)], dim=1) # theta: [all num, ] -> [all num , 3]
         iRC2 = torch.stack([-sin, cos, torch.zeros_like(theta)], dim=1)
         iRC3 = torch.stack([x, y, torch.ones_like(theta)], dim=1)
         iR = torch.stack([iRC1, iRC2, iRC3], dim = 2) # theta: [all num , 3] -> [all num, 3, 3]
+        R_rot_only = torch.stack([RC1, RC2, RC3_no_trans], dim = 2)
 
-        return R, iR
+        return R, iR, R_rot_only
 
     def get_osm_style(self, data, train_frame, predict_frame):
         data_copy = data.clone().detach()
